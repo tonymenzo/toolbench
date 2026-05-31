@@ -1,0 +1,97 @@
+site_name: toolbench
+site_description: >-
+  Reference for the toolbench CLI: running, authoring, and scoring benchmarks
+  for AI agents, tools, and harnesses.
+site_url: https://toolbench-ai.com/docs/
+repo_url: https://github.com/tonymenzo/toolbench
+repo_name: tonymenzo/toolbench
+edit_uri: edit/main/userdocs/
+
+docs_dir: userdocs
+site_dir: site
+
+theme:
+  name: material
+  # Brand colors (dark red + black) are defined in stylesheets/extra.css via
+  # custom CSS variables; the palette below selects the "custom" slot. Light
+  # is the default (first entry, no prefers-color-scheme media); the toggle
+  # switches to dark and the choice persists.
+  palette:
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - navigation.tracking
+    - navigation.indexes
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+    - toc.follow
+    - toc.integrate
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.keys
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Guides:
+      - Install & quickstart: guides/install-and-quickstart.md
+      - Running a benchmark: guides/running-a-benchmark.md
+      - Reading results & scores: guides/reading-results.md
+      - Harnesses & models: guides/harnesses.md
+      - Loadouts & tools: guides/loadouts.md
+      - Variants: guides/variants.md
+      - Integrating toolbase: guides/toolbase.md
+  - Authoring:
+      - Overview: authoring/overview.md
+      - Define a benchmark: authoring/define-a-benchmark.md
+      - Rubrics & checks: authoring/rubrics-and-checks.md
+      - Custom tools & providers: authoring/custom-tools.md
+  - Reference:
+      - Commands: reference/commands.md
+      - Schemas: reference/schemas.md
+      - Metrics: reference/metrics.md
+      - Files & layout: reference/files-and-layout.md
+      - Vocabulary: reference/vocabulary.md
+  - Concepts: explanation.md
+  - Troubleshooting: troubleshooting.md

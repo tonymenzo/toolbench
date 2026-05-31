@@ -1,0 +1,5 @@
+name: primitives_only
+tools:
+  sources:
+    - python: toolbench.bench_tools.dunderkit     # all dunder primitives, no metric tool
+skills: []

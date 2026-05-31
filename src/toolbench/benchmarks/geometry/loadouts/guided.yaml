@@ -1,0 +1,8 @@
+name: guided
+tools:
+  sources:
+    - python: toolbench.bench_tools.dunderkit     # NOTE: no euclid toolset; the skill teaches assembly
+skills:
+  - name: distance_recipe
+    file: ./skills/distance_recipe.md
+    mode: on_demand

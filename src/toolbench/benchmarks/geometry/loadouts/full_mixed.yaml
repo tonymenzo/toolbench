@@ -1,0 +1,9 @@
+name: full_mixed
+tools:
+  sources:
+    - python: toolbench.bench_tools.dunderkit      # local (escape hatch)
+    - toolbase:                          # frozen, via toolbase
+        toolsets:
+          euclid:
+            version: "==1.0.0"
+skills: []

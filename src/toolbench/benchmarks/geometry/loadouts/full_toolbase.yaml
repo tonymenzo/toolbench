@@ -1,0 +1,11 @@
+name: full_toolbase
+tools:
+  sources:
+    - toolbase:                          # mirrors a serve.yaml toolkit block
+        toolsets:
+          dunderkit:
+            version: ">=1.0,<2.0"
+            bundles: [additive, multiplicative, powers]
+          euclid:
+            version: "==1.0.0"
+skills: []

@@ -1,0 +1,16 @@
+name: direct
+description: |
+  Points are given directly in `points.json` in the sandbox; the user
+  prompt names the file path and the exact output JSON schema. Pure
+  arithmetic — no derivation, no frame conversion. Reproduces the
+  original single-variant geometry behavior.
+
+axes:
+  input: direct        # points handed to the agent as data
+  frame: cartesian     # straight (x, y) — no conversion needed
+
+user_prompt_file: ./prompts/user.md
+system_prompt_file: ./prompts/system.md
+
+sandbox:
+  template_dir: ./sandbox/template
