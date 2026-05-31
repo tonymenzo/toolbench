@@ -24,28 +24,27 @@ production.
 
 ## Setup
 
-1. **Author or install a toolkit** in toolbase and expose its tools in a profile:
+1. **Install a toolkit and activate it into a profile.** toolbench ships a small
+   `calculator` toolkit under `examples/calculator` (basic arithmetic + a scientific
+   bundle — enough to compute the `geometry` task's distance and midpoint):
 
     ```bash
-    tb init geometry-tools           # scaffold a toolkit (or `tb install <name>`)
-    # ... write @define_tool functions, then:
-    tb install -e ./geometry-tools   # editable install into the toolbase cache
-    tb activate geometry-tools       # add it to a profile (default, project-local)
-    # or curate a named profile explicitly:
-    tb profile create geometry-tools
+    tb install -e examples/calculator -g -a   # editable install + activate (user scope)
+    tb list                                   # calculator  ✓ active
     ```
 
-    See the [toolbase docs](https://toolbase-ai.com/docs/) for authoring and curation.
+    `-a` activates it into your user `default` profile. See the
+    [toolbase docs](https://toolbase-ai.com/docs/) for authoring your own toolkit.
 
-2. **Point a loadout at the profile.** Add a loadout to your benchmark under
-   `loadouts/`:
+2. **Point a loadout at the profile.** The bundled `calc_toolbase` loadout does exactly
+   this:
 
     ```yaml
-    # loadouts/served.yaml
-    name: served
+    # benchmarks/geometry/loadouts/calc_toolbase.yaml
+    name: calc_toolbase
     tools:
       sources:
-        - toolbase: { profile: geometry-tools }
+        - toolbase: { profile: default }
     ```
 
     Supported source forms:
@@ -59,7 +58,7 @@ production.
 3. **Run it** — `python:` and `toolbase:` sources can even be mixed in one loadout:
 
     ```bash
-    toolbench run --benchmark geometry --loadouts served \
+    toolbench run --benchmark geometry --loadouts calc_toolbase \
         --models claude-haiku-4-5 --n 3 --max-cost-usd 0.50
     ```
 
