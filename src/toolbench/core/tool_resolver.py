@@ -9,8 +9,8 @@ loadout's toolkit is an ordered list of sources, each routed by backend:
   - `python`  : import a module (dotted name OR filesystem path) that
                 exposes `TOOLS` (and optional `BUNDLES`); apply `select:`;
                 this is the no-toolbase escape hatch.
-  - `toolbase`: resolved by toolbase — NOT available yet; raises a clear
-                error pointing back at the `python:` escape hatch.
+  - `toolbase`: resolved in-process via toolbase's orchestral bridge
+                (`toolbase.connect.orchestral.toolbase_tools`).
 
 Invariants: a `select:` item must match a bundle name or a tool name
 (else error); a tool name appearing from two sources is an error.
@@ -18,6 +18,7 @@ Invariants: a `select:` item must match a bundle name or a tool name
 structured account of what resolved (for the manifest and `--dry-run`).
 """
 
+import contextlib
 import importlib
 import importlib.util
 import os
@@ -139,8 +140,8 @@ def resolve_python_source(source: Source, base_directory: str) -> list:
     mod = _import_module_or_path(module)
     # A module may expose a per-trial factory `make_tools(base_directory,
     # select=...)` — needed when tools require base_directory / external
-    # config at construction (e.g. heptapod's grouped tools). The factory
-    # owns `select` semantics and returns ready instances.
+    # config at construction. The factory owns `select` semantics and
+    # returns ready instances.
     make = getattr(mod, "make_tools", None)
     if callable(make):
         return list(make(base_directory, select=source.select,
@@ -160,15 +161,85 @@ def resolve_python_source(source: Source, base_directory: str) -> list:
 
 
 # --------------------------------------------------------------------------
-# toolbase source (stub until toolbase's library API ships)
+# toolbase source (in-process resolution via toolbase's orchestral bridge)
 # --------------------------------------------------------------------------
+# `toolbase.connect.orchestral.toolbase_tools()` is a *context manager*: it
+# spins up one subprocess per served toolkit and tears them down on exit. A
+# trial needs those tools live for its whole run, so we hold each sandbox's
+# subprocesses open in an ExitStack keyed by the sandbox dir, and the caller
+# (the runner, or the CLI's resolution preview) calls `release_toolbase(dir)`
+# once it's done. This keeps `build_agent_tools` returning the same
+# `(tools, report)` it always has — no signature change for callers.
+_TOOLBASE_STACKS: dict[str, contextlib.ExitStack] = {}
+
+
+def _toolbase_stack(base_directory: str) -> contextlib.ExitStack:
+    st = _TOOLBASE_STACKS.get(base_directory)
+    if st is None:
+        st = contextlib.ExitStack()
+        _TOOLBASE_STACKS[base_directory] = st
+    return st
+
+
+def release_toolbase(base_directory: str) -> None:
+    """Tear down any toolbase subprocesses started for this sandbox. A no-op
+    when none were started, so it's always safe to call after a trial / preview."""
+    st = _TOOLBASE_STACKS.pop(base_directory, None)
+    if st is not None:
+        st.close()
+
+
 def resolve_toolbase_source(source: Source, base_directory: str) -> list:
-    raise RuntimeError(
-        "the `toolbase:` source backend is not available yet. Use a `python:` "
-        "source instead (the no-toolbase escape hatch) — see "
-        "docs/WORKFLOWS_SIMPLE.md (W1). "
-        f"Offending source: {source.config!r}"
-    )
+    """Resolve a `toolbase:` loadout source to orchestral tools, in-process.
+
+    `source.config` is a dict. Supported forms:
+      - `{profile: NAME}`                     serve toolbase profile NAME
+      - `{profile: NAME, project_root: PATH}` resolve config against PATH
+      - `{project_root: PATH}`                serve PATH's active/default profile
+
+    The inline `{toolsets: {...}}` form (compile-to-`.toolbase/`) is not wired
+    yet — author a toolbase profile and reference it with `profile:` instead.
+    Returns orchestral `BaseTool`s (namespaced `<toolkit>__<tool>`), held live
+    until `release_toolbase(base_directory)`.
+    """
+    try:
+        from toolbase.connect.orchestral import toolbase_tools
+    except Exception as e:  # toolbase is an optional dependency
+        raise RuntimeError(
+            "the `toolbase:` source backend needs toolbase installed "
+            "(`pip install 'toolbench[toolbase]'`, or an editable checkout). "
+            "Use a `python:` source for the no-toolbase escape hatch. "
+            f"(import error: {e})"
+        ) from e
+
+    cfg = source.config if isinstance(source.config, dict) else {}
+    profile = cfg.get("profile")
+    project_root = cfg.get("project_root")
+    if project_root:
+        project_root = Path(os.path.expandvars(str(project_root))).expanduser()
+    if not profile and not project_root:
+        if cfg.get("toolsets"):
+            raise RuntimeError(
+                "toolbase source: the inline `toolsets:` spec is not wired yet. "
+                "Author a toolbase profile (`tb profile create ...`) and reference "
+                "it here as `toolbase: {profile: NAME}`. "
+                f"Offending source: {source.config!r}"
+            )
+        raise RuntimeError(
+            "toolbase source: give a `profile:` (and optional `project_root:`). "
+            f"Offending source: {source.config!r}"
+        )
+
+    stack = _toolbase_stack(base_directory)
+    tools = list(stack.enter_context(
+        toolbase_tools(profile=profile, project_root=project_root, quiet=True)
+    ))
+    # toolbase curates the served set via its profile; a loadout-level `select:`
+    # would double-curate with different (namespaced) names, so it's ignored
+    # here. Scope file-aware tools to the sandbox, same as the python: path.
+    for t in tools:
+        _maybe_set_base_directory(t, base_directory)
+    return tools
 
 
 # --------------------------------------------------------------------------
