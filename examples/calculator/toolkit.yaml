@@ -1,0 +1,37 @@
+name: calculator
+version: 1.0.0
+description: A small calculator toolkit — basic arithmetic plus a scientific bundle.
+author: toolbench examples
+license: MIT
+category: utils
+python_version: "3.12"
+
+bundles:
+  basic: {}
+  scientific: {}
+
+tools:
+  - name: add
+    function: tools.basic.add
+    description: Add two numbers.
+    bundle: basic
+  - name: subtract
+    function: tools.basic.subtract
+    description: Subtract b from a.
+    bundle: basic
+  - name: multiply
+    function: tools.basic.multiply
+    description: Multiply two numbers.
+    bundle: basic
+  - name: divide
+    function: tools.basic.divide
+    description: Divide a by b.
+    bundle: basic
+  - name: power
+    function: tools.scientific.power
+    description: Raise base to the given exponent (use exp=0.5 for square root).
+    bundle: scientific
+  - name: sqrt
+    function: tools.scientific.sqrt
+    description: Square root of a number.
+    bundle: scientific

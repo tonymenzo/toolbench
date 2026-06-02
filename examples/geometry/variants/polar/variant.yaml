@@ -1,0 +1,24 @@
+name: polar
+description: |
+  Empty sandbox + derived points + a coordinate-frame twist: the agent
+  solves the same constructions as the `derived` variant but the
+  resulting values are POLAR (ρ, θ) and must be converted to Cartesian
+  before the distance and midpoint are computed. Isolates careful-
+  reading + frame-conversion capability: the derived->polar reach delta
+  = the cost of catching the polar caveat in the prompt.
+
+  Note: ρ₁ = 0 makes p1 = (0, 0) in Cartesian regardless of θ₁, and
+  ρ₂ = 5 with θ₂ = arctan(4/3) maps to p2 = (3, 4) — so the family-level
+  ground truth (distance 5.0, midpoint [1.5, 2.0]) holds for all three
+  variants. Agents that skim past "polar" will compute Cartesian
+  distance on the raw (ρ, θ) pairs and report ~3.16 with midpoint
+  [2.5, 1.97], failing the close_to checks.
+
+axes:
+  input: derived       # same symbolic derivation as the `derived` variant
+  frame: polar         # results are (ρ, θ); must convert to Cartesian
+
+user_prompt_file: ./prompts/user.md
+system_prompt_file: ./prompts/system.md
+
+# No sandbox block (intentional — points live in the prompt).

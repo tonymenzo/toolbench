@@ -1,0 +1,47 @@
+name: geometry
+version: 0.1.0
+description: Euclidean distance and midpoint between two 2-D points.
+
+default_harness: orchestral/anthropic
+default_loadout: full_local
+# Three variants (direct/derived/polar) — see variants/. All three
+# share the same ground truth (distance 5.0, midpoint [1.5, 2.0]) so
+# the family-level rubric grades them identically and cross-variant
+# reach deltas are meaningful (and not contaminated by reference-value
+# differences). Names describe what each variant supplies, not a
+# presumed difficulty ordering.
+default_variant: direct
+
+ground_truth:
+  dir: ./ground_truth
+
+rubric:
+  type: stagewise           # ordered stages; trial score = prefix product
+  stages:
+    - id: answer_written
+      description: output/answer.json exists with the required keys
+      weight: 0.2
+      checks:
+        - json_with_keys:
+            file: output/answer.json
+            required_keys: [distance, midpoint]
+    - id: midpoint_correct
+      description: midpoint is within 1% of ground truth
+      weight: 0.3
+      checks:
+        - close_to:
+            file: output/answer.json
+            field: midpoint
+            reference: ./ground_truth/answer.json
+            tolerance_frac: 0.01
+      expected_tool_calls: [add, divide]        # optional diagnostic, not graded
+    - id: distance_correct
+      description: Euclidean distance is within 1% of ground truth
+      weight: 0.5
+      checks:
+        - close_to:
+            file: output/answer.json
+            field: distance
+            reference: ./ground_truth/answer.json
+            tolerance_frac: 0.01
+      expected_tool_calls: [euclidean_distance]

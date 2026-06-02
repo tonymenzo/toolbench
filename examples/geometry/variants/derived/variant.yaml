@@ -1,0 +1,17 @@
+name: derived
+description: |
+  Empty sandbox. Points `p1` and `p2` are NOT given directly — the user
+  prompt describes them via two small symbolic constructions (a centroid
+  and a line intersection) the agent must solve before any arithmetic.
+  Isolates symbolic-reasoning capability: the direct->derived reach
+  delta = the input-derivation cost.
+
+axes:
+  input: derived       # agent must solve a small system to recover (x, y)
+  frame: cartesian     # straight (x, y) — no conversion needed
+
+user_prompt_file: ./prompts/user.md
+system_prompt_file: ./prompts/system.md
+
+# No `sandbox:` block — `template_dir` defaults to None and the runner
+# starts the trial in an empty sandbox (the points live in the prompt).

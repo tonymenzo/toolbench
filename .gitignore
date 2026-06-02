@@ -41,9 +41,22 @@ ENV/
 htmlcov/
 .hypothesis/
 
+# Claude Code local state
+.claude/
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 .DS_Store
+
+# local handoff / scratch — not for commit
+PORT_STATUS.md
+*.orig
+
+# built docs
+site/
+
+# run output
+runs/

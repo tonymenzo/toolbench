@@ -1,0 +1,78 @@
+/* toolbench brand palette: dark red + black.
+ *
+ * mkdocs.yml selects `primary: custom` / `accent: custom`; this file fills
+ * those slots by overriding Material's CSS custom properties. Light is the
+ * default scheme; `[data-md-color-scheme="slate"]` is the dark toggle.
+ *
+ * The sibling project toolbase uses teal; toolbench is deliberately a
+ * darker red so the two are visually distinct at a glance.
+ */
+
+:root {
+  /* Brand reds */
+  --tb-red:        #8a1c2b;  /* primary — deep, dark red */
+  --tb-red-light:  #a8323f;
+  --tb-red-dark:   #6d1521;
+  --tb-red-accent: #c0392b;  /* accent — slightly brighter for links/hover */
+  --tb-ink:        #14110f;  /* near-black, warm */
+}
+
+/* ── Light scheme ─────────────────────────────────────────────────── */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        var(--tb-red);
+  --md-primary-fg-color--light: var(--tb-red-light);
+  --md-primary-fg-color--dark:  var(--tb-red-dark);
+  --md-primary-bg-color:        #ffffff;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+
+  --md-accent-fg-color:         var(--tb-red-accent);
+  --md-accent-fg-color--transparent: rgba(192, 57, 43, 0.1);
+
+  /* Inline code in the brand tint, not the default indigo. */
+  --md-code-hl-function-color:  var(--tb-red);
+  --md-typeset-a-color:         var(--tb-red);
+}
+
+/* ── Dark (slate) scheme ──────────────────────────────────────────── */
+[data-md-color-scheme="slate"] {
+  --md-hue: 0;  /* warm-neutral slate base */
+
+  /* Brighter reds so they read on the dark surface. */
+  --md-primary-fg-color:        #b3303f;
+  --md-primary-fg-color--light: #cc4151;
+  --md-primary-fg-color--dark:  #8a1c2b;
+  --md-primary-bg-color:        #14110f;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+
+  --md-accent-fg-color:         #e05a4d;
+  --md-accent-fg-color--transparent: rgba(224, 90, 77, 0.1);
+
+  --md-typeset-a-color:         #e2697a;
+}
+
+/* The top header bar: solid brand red in both schemes. */
+.md-header,
+.md-tabs {
+  background-color: var(--md-primary-fg-color);
+}
+
+/* Tighten admonition/code aesthetics to match the brand. */
+.md-typeset .admonition.note,
+.md-typeset details.note {
+  border-color: var(--tb-red);
+}
+
+/* Home-page wordmark: "tool" near-black in light (white in dark so it doesn't
+ * vanish); "bench" the brand red. A CLI/code feel via monospace — the sibling
+ * of toolbase's teal "tool/base" wordmark. */
+.md-typeset h1 .tb-tool,
+.md-typeset h1 .tb-bench,
+.md-header__title {
+  font-family: "Courier New", Courier, monospace;
+}
+.md-typeset h1 .tb-bench {
+  color: var(--tb-red-accent);
+}
+[data-md-color-scheme="default"] .md-typeset h1 .tb-tool { color: #000; }
+[data-md-color-scheme="slate"]   .md-typeset h1 .tb-tool { color: #fff; }
+[data-md-color-scheme="slate"]   .md-typeset h1 .tb-bench { color: #e2697a; }

@@ -1,0 +1,5 @@
+name: primitives_only
+tools:
+  sources:
+    - python: tools/dunderkit.py     # all dunder primitives, no metric tool
+skills: []

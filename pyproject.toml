@@ -4,27 +4,51 @@ build-backend = "hatchling.build"
 
 [project]
 name = "toolbench"
-version = "0.0.1"
-description = "A benchmarking framework for AI tools and agents."
+version = "0.1.0"
+description = "A platform and CLI for building benchmarks for agentic tools and harnesses."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [
     { name = "Tony Menzo" },
 ]
-keywords = ["benchmark", "ai", "agents", "tools", "llm"]
+keywords = ["benchmark", "ai", "agents", "tools", "llm", "evaluation", "orchestral"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+dependencies = [
+    "orchestral-ai>=1.3.0",
+    "click>=8.0",
+    "pyyaml>=6.0.3",
+    "numpy>=2.3.5",
+    "scipy>=1.16.3",
+    "matplotlib>=3.10.8",
+    "rich>=14.2.0",
+    "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+# Closes the loop: resolve `toolbase:` loadout sources via toolbase's
+# in-process orchestral integration. Optional — `python:` sources work without it.
+toolbase = ["toolbase>=0.1.0"]
+dotenv = ["python-dotenv>=1.2.1"]
+docs = ["mkdocs-material>=9.5"]
+dev = [
+    "pytest>=7.4.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+toolbench = "toolbench.cli:main"
+tbe = "toolbench.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/tonymenzo/toolbench"
@@ -32,4 +56,14 @@ Repository = "https://github.com/tonymenzo/toolbench"
 Issues = "https://github.com/tonymenzo/toolbench/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/toolbench"]
+# Ship only the framework. Benchmarks (e.g. examples/geometry) are repo content,
+# resolved by path at the CLI — not bundled into the wheel.
+packages = ["toolbench"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

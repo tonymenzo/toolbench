@@ -1,0 +1,8 @@
+name: calc_toolbase
+# Resolve tools from a toolbase profile (the `calculator` example toolkit).
+# Requires: toolbench[toolbase] installed, and the calculator toolkit installed
+# + activated into the named profile (see docs/guides/toolbase.md).
+tools:
+  sources:
+    - toolbase: { profile: default }
+skills: []
