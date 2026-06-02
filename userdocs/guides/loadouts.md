@@ -91,7 +91,7 @@ measure whether the *guidance* (rather than a dedicated tool) is enough.
 
 ## The geometry loadouts
 
-The bundled benchmark ships a spread of loadouts so you can see the axis in action:
+The example benchmark ships a spread of loadouts so you can see the axis in action:
 
 | Loadout         | Tools                                              | Measures…                          |
 |-----------------|---------------------------------------------------|------------------------------------|

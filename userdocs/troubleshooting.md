@@ -21,7 +21,7 @@ to a `python:` module — the no-toolbase escape hatch. See
 ## "the inline `toolsets:` spec is not wired yet"
 
 The `toolbase: { toolsets: { ... } }` form isn't implemented. Author a toolbase profile and
-reference it as `toolbase: { profile: NAME }` instead. The bundled `full_toolbase` /
+reference it as `toolbase: { profile: NAME }` instead. The example `full_toolbase` /
 `full_mixed` loadouts use the unwired form and are placeholders.
 
 ## "tool name collision: 'X' provided by both …"
