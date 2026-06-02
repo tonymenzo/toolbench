@@ -117,21 +117,27 @@ def _register_orchestral_passthroughs() -> None:
     These are pure passthroughs: no adopter config required, just the
     Orchestral class hierarchy. Credentials come from the standard
     provider env vars on construction.
-    """
-    from orchestral.llm import GPT, Claude, Gemini, Groq
 
-    def _passthrough(cls):
+    The provider's Orchestral class is imported lazily inside its
+    factory, not at registration time, so a missing optional provider
+    dependency (e.g. `google-genai` for Gemini) only surfaces if that
+    provider is actually used. Importing the module or running a stub
+    dry-run never pulls in every provider's deps.
+    """
+    def _passthrough(class_name: str):
         def factory(model: str | None = None, **kwargs):
+            import importlib
+            cls = getattr(importlib.import_module("orchestral.llm"), class_name)
             if model:
                 return cls(model=model, **kwargs)
             return cls(**kwargs)
-        factory.__name__ = f"_factory_{cls.__name__}"
+        factory.__name__ = f"_factory_{class_name}"
         return factory
 
-    register_provider("anthropic", _passthrough(Claude))
-    register_provider("openai",    _passthrough(GPT))
-    register_provider("google",    _passthrough(Gemini))
-    register_provider("groq",      _passthrough(Groq))
+    register_provider("anthropic", _passthrough("Claude"))
+    register_provider("openai",    _passthrough("GPT"))
+    register_provider("google",    _passthrough("Gemini"))
+    register_provider("groq",      _passthrough("Groq"))
 
 
 def _register_litellm_provider() -> None:
