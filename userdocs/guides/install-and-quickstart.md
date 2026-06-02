@@ -8,7 +8,7 @@ pip install 'toolbench[toolbase]'     # + resolve tools from toolbase profiles
 pip install 'toolbench[docs]'         # + build these docs locally
 ```
 
-Requires Python ≥ 3.12. Installing puts two equivalent commands on your path — `toolbench`
+Requires Python ≥ 3.12. Installing puts two equivalent commands on your path, `toolbench`
 and the short alias `tbe`.
 
 ```bash
@@ -19,19 +19,19 @@ tbe --version
 
 ## Set a provider key
 
-Real runs call an LLM, so export the key your harness's provider needs (or drop it in a
-`.env` at the repo root, which toolbench loads before reading the environment):
+Real runs call an LLM, so export the key your harness's provider needs. You can also drop
+it in a `.env` at the repo root, which toolbench loads before reading the environment.
 
 ```bash
 export ANTHROPIC_API_KEY=sk-...
 ```
 
-No key needed for a dry run — `--model stub` never calls a provider.
+A dry run needs no key, since `--model stub` never calls a provider.
 
 ## Your first run (\$0)
 
-The example `geometry` benchmark is self-contained. Validate the entire pipeline — tool
-resolution, the agent loop, grading, the summary, the plots — without spending anything:
+The example `geometry` benchmark is self-contained. Validate the entire pipeline (tool
+resolution, the agent loop, grading, the summary, the plots) without spending anything:
 
 ```bash
 toolbench run --benchmark examples/geometry --model stub \
@@ -39,7 +39,7 @@ toolbench run --benchmark examples/geometry --model stub \
 ```
 
 You'll see a **resolution preview** (the exact tools each harness × loadout yields) and a
-run directory written under `runs/`. A clean dry run means everything is wired.
+run directory written under `runs/`. A clean dry run means everything is wired up.
 
 ## A real run
 
@@ -54,8 +54,9 @@ This runs two tool conditions × 3 seeds, grades each trial, and writes
 
 ## Where next
 
-- **Running more:** [Running a benchmark](running-a-benchmark.md) — sweeping axes, resume,
-  regrade.
-- **Authoring:** [Authoring overview](../authoring/overview.md) — build your own benchmark.
-- **Tools from toolbase:** [Integrating toolbase](toolbase.md).
-- **The ideas:** [Concepts](../explanation.md).
+- **Running more.** [Running a benchmark](running-a-benchmark.md) covers sweeping axes,
+  resume, and regrade.
+- **Authoring.** [Authoring overview](../authoring/overview.md) walks through building your
+  own benchmark.
+- **Tools from toolbase.** [Integrating toolbase](toolbase.md).
+- **The ideas.** [Concepts](../explanation.md).

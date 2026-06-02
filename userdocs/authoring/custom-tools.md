@@ -3,7 +3,7 @@
 You have three ways to give an agent domain tools, and a hook for adding a model provider.
 For real, versioned, isolated toolkits, author them in
 [toolbase](../guides/toolbase.md) and reference a profile. For quick, benchmark-local
-tools, write a Python module and point a `python:` loadout source at it — the no-toolbase
+tools, write a Python module and point a `python:` loadout source at it, the no-toolbase
 escape hatch.
 
 ## A benchmark-local tool module
@@ -34,7 +34,7 @@ tools:
 
 A `python:` source accepts either this **filesystem path** (a `.py` file or package
 directory, resolved against the benchmark dir) or a **dotted module path** for a tool that
-ships in an installed package — so a tool module can live anywhere.
+ships in an installed package, so a tool module can live anywhere.
 
 ## Bundles and `select:`
 
@@ -68,8 +68,8 @@ def make_tools(base_directory, select=None, config=None):
 ```
 
 The runner calls `make_tools(sandbox_dir, select=..., config=...)` per trial. (For simple
-`@define_tool` functions you don't need this — toolbench best-effort scopes any tool that
-carries a `base_directory` to the sandbox automatically.)
+`@define_tool` functions you don't need this, since toolbench best-effort scopes any tool
+that carries a `base_directory` to the sandbox automatically.)
 
 ## Adding a model provider
 

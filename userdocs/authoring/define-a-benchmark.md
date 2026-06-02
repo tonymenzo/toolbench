@@ -19,7 +19,7 @@ ground_truth:
   dir: ./ground_truth          # reference answers, resolved relative to this file
 
 rubric:
-  type: stagewise              # ordered stages; trial score = prefix product
+  type: stagewise              # ordered stages, trial score = prefix product
   stages:
     - id: answer_written
       description: output/answer.json exists with the required keys
@@ -52,10 +52,10 @@ rubric:
 | Field                | Meaning                                                              |
 |----------------------|---------------------------------------------------------------------|
 | `name`               | The id used by `--benchmark`. Falls back to the directory name.      |
-| `description`        | One line; shown in listings and the manifest.                       |
+| `description`        | One line, shown in listings and the manifest.                       |
 | `default_*`          | Axis defaults used when the CLI flag is omitted.                     |
 | `ground_truth.dir`   | Directory of reference files for correctness checks.                 |
-| `rubric`             | The grading spec — see [Rubrics & checks](rubrics-and-checks.md).    |
+| `rubric`             | The grading spec. See [Rubrics & checks](rubrics-and-checks.md).     |
 | `checks`             | *(optional)* path to a benchmark-local `checks.py` (custom checks).  |
 
 ## Ground truth
@@ -69,13 +69,13 @@ against the same answer:
 { "distance": 5.0, "midpoint": [1.5, 2.0] }
 ```
 
-Design variants so they all resolve to this one answer — a constant denominator is what
+Design variants so they all resolve to this one answer. A constant denominator is what
 makes cross-variant reach deltas comparable.
 
 ## Prompts and the deliverable
 
 Each variant supplies a user prompt (and optional system prompt). Name the deliverable and
-its exact schema in the prompt — the rubric checks a concrete file, so the agent must know
+its exact schema in the prompt. The rubric checks a concrete file, so the agent must know
 where to write it:
 
 ```markdown
@@ -86,15 +86,15 @@ Write the result to `output/answer.json` as:
 ```
 
 Anything you want present at trial start (here, `points.json`) goes in the variant's
-`sandbox/template/`; it's copied into a fresh sandbox per trial.
+`sandbox/template/`, which is copied into a fresh sandbox per trial.
 
 ## Wiring the axes
 
-- **Harness** — at least one `harnesses/<runtime>/<provider>.yaml`
+- **Harness.** At least one `harnesses/<runtime>/<provider>.yaml`
   (see [Harnesses](../guides/harnesses.md)).
-- **Loadout** — at least one `loadouts/<name>.yaml`; usually `core_only` plus a tool
+- **Loadout.** At least one `loadouts/<name>.yaml`, usually `core_only` plus a tool
   condition to ablate (see [Loadouts](../guides/loadouts.md)).
-- **Variant** — at least one `variants/<name>/` (see [Variants](../guides/variants.md)).
+- **Variant.** At least one `variants/<name>/` (see [Variants](../guides/variants.md)).
 
 ## Validate
 
@@ -103,6 +103,6 @@ toolbench run --benchmark <name> --model stub \
     --loadouts core_only --n 1 --max-cost-usd 0 --dry-run
 ```
 
-A clean dry run means: the benchmark was discovered, the harness/loadout/variant resolved,
+A clean dry run means the benchmark was discovered, the harness/loadout/variant resolved,
 the tool list built, and the grader ran against an (empty) sandbox. Now do a small real run
 and read the [summary](../guides/reading-results.md).

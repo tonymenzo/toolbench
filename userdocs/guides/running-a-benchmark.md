@@ -21,7 +21,7 @@ shortest real run is just `--benchmark`, `--models`, and `--max-cost-usd`.
 
 ## Sweeping axes
 
-Pass a comma-separated list to any axis to sweep it; toolbench runs the full cross-product
+Pass a comma-separated list to any axis to sweep it. toolbench runs the full cross-product
 and reports one cell per `(model × condition)`:
 
 ```bash
@@ -43,13 +43,13 @@ you want a clean delta (see [Reading results & scores](reading-results.md)).
 | `--loadouts` / `--conditions`     | Loadout name(s). Default: benchmark's `default_loadout`.        |
 | `--variant` / `--variants`        | Variant name(s). Default: benchmark's `default_variant`.        |
 | `--n`                             | Trials (seeds) per cell. Default 3.                            |
-| `--seed-base`                     | Base seed; trial seeds are `seed_base + i`. Default 1001.      |
+| `--seed-base`                     | Base seed. Trial seeds are `seed_base + i`. Default 1001.      |
 | `--max-cost-usd`                  | Hard budget cap. The run aborts when spend would exceed it. Required. |
 
-## Dry runs: validate for \$0
+## Dry runs (validate for \$0)
 
-Before spending tokens, validate the entire pipeline — tool resolution, grading, summary,
-plots — with no LLM calls:
+Before spending tokens, validate the entire pipeline (tool resolution, grading, summary,
+plots) with no LLM calls:
 
 ```bash
 toolbench run --benchmark examples/geometry --model stub \
@@ -58,20 +58,20 @@ toolbench run --benchmark examples/geometry --model stub \
 
 `--dry-run` prints a **resolution preview** (the exact tool list each
 harness × loadout produces, including any toolbase errors) and then skips the agent call.
-It's the fastest way to catch a broken loadout or a misspelled tool before a real run.
+It is the fastest way to catch a broken loadout or a misspelled tool before a real run.
 
 ## Loop overrides
 
-The retry/loop knobs default to each harness's `loop:` block; pass a flag to override for
+The retry/loop knobs default to each harness's `loop:` block. Pass a flag to override for
 this run:
 
 | Flag                    | Overrides                                                              |
 |-------------------------|-----------------------------------------------------------------------|
-| `--max-iterations`      | `loop.max_iterations` — the agent's tool-call round-trip cap.          |
-| `--max-format-retries`  | `loop.max_format_retries` — resumes on a malformed-tool-call crash.   |
-| `--continue-nudges`     | `loop.continue_nudges` — presence-gated "you're not done" resumes.    |
+| `--max-iterations`      | `loop.max_iterations`, the agent's tool-call round-trip cap.          |
+| `--max-format-retries`  | `loop.max_format_retries`, resumes on a malformed-tool-call crash.   |
+| `--continue-nudges`     | `loop.continue_nudges`, presence-gated "you're not done" resumes.    |
 
-`--continue-nudges` only ever fires when a *required deliverable is still absent* — it
+`--continue-nudges` only ever fires when a *required deliverable is still absent*. It
 never consults a correctness check, so a finished-but-wrong trial is left alone and the
 grading oracle never leaks.
 
@@ -84,10 +84,10 @@ also teed to `runs/<id>/console.log`, so a backgrounded run stays live-tailable.
 
 ## Resuming and re-grading
 
-- **`toolbench resume --run-id <id>`** — pick up an interrupted run: re-reads the manifest
-  and `trials.jsonl`, runs only the seeds that didn't finish, and re-aggregates. Widen the
-  budget with `--max-cost-usd` if the original cap is exhausted.
-- **`toolbench regrade --run-id <id>`** — re-judge a finished run's preserved artifacts
+- **`toolbench resume --run-id <id>`** picks up an interrupted run. It re-reads the
+  manifest and `trials.jsonl`, runs only the seeds that didn't finish, and re-aggregates.
+  Widen the budget with `--max-cost-usd` if the original cap is exhausted.
+- **`toolbench regrade --run-id <id>`** re-judges a finished run's preserved artifacts
   after a rubric change, without re-running any agent.
 
 See [Commands](../reference/commands.md) for the full reference.

@@ -1,8 +1,8 @@
 # Rubrics & checks
 
-The rubric is where a benchmark earns its keep. A good rubric is a **funnel**: ordered
-stages from "did the agent produce anything?" to "is it exactly right?", so the score says
-*how far* an agent got and the per-stage breakdown says *where it fell off*.
+The rubric is where a benchmark earns its keep. A good rubric is a **funnel** of ordered
+stages, running from "did the agent produce anything?" to "is it exactly right?", so the
+score says *how far* an agent got and the per-stage breakdown says *where it fell off*.
 
 ## Stagewise scoring
 
@@ -29,20 +29,21 @@ $$
 R_j = \frac{1}{\sum_i w_i}\sum_i w_i \prod_{\ell \le i} x_\ell
 $$
 
-A stage banks its weight only if it and every earlier stage passed. Order matters: put the
-cheap "did it produce a deliverable" gate first and the demanding correctness checks last.
-Weights are yours to assign; they need not sum to 1 (the score is normalized), but a sum of
-1 makes reach read as a clean fraction. See [Metrics](../reference/metrics.md) for the math.
+A stage banks its weight only if it and every earlier stage passed. Order matters, so put
+the cheap "did it produce a deliverable" gate first and the demanding correctness checks
+last. Weights are yours to assign and need not sum to 1 (the score is normalized), but a
+sum of 1 makes reach read as a clean fraction. See [Metrics](../reference/metrics.md) for
+the math.
 
 !!! tip "Design the funnel deliberately"
-    `answer_written (0.2) → midpoint (0.3) → distance (0.5)` means: 0.2 for *trying*
-    correctly-shaped output, then most of the credit for the genuinely hard step. If two
-    benchmarks weight the same task differently, their reaches aren't comparable — keep
+    `answer_written (0.2) → midpoint (0.3) → distance (0.5)` puts 0.2 on *trying*
+    correctly-shaped output, then most of the credit on the genuinely hard step. If two
+    benchmarks weight the same task differently, their reaches aren't comparable, so keep
     weights stable across a study.
 
 ## Checks
 
-A check is a single mapping keyed by its name, with that check's parameters as the value —
+A check is a single mapping keyed by its name, with that check's parameters as the value,
 the same key-as-discriminator shape loadout sources use:
 
 ```yaml
@@ -64,13 +65,13 @@ The two built-ins you'll use most:
 | `json_with_keys` | presence    | the JSON file exists and contains every `required_keys` entry.     |
 | `close_to`       | correctness | a scalar/vector field is within `tolerance_frac` of the reference. |
 
-Each check carries a **role** — `presence` (the deliverable was made) or `correctness`
-(it's right). The runner uses presence checks for the optional *continue-nudge*: if a
-required deliverable is still absent when the model stops, it can be nudged to keep going —
-but a correctness check is **never** consulted for that, so the grading oracle never leaks
-and a finished-but-wrong trial is left alone.
+Each check carries a **role**, either `presence` (the deliverable was made) or
+`correctness` (it's right). The runner uses presence checks for the optional
+*continue-nudge*. If a required deliverable is still absent when the model stops, it can be
+nudged to keep going, but a correctness check is **never** consulted for that, so the
+grading oracle never leaks and a finished-but-wrong trial is left alone.
 
-`expected_tool_calls:` on a stage is a non-graded diagnostic — it records which tools you'd
+`expected_tool_calls:` on a stage is a non-graded diagnostic. It records which tools you'd
 expect the agent to call, surfaced in the transcript, but never affects the score.
 
 ## Custom checks
@@ -96,8 +97,8 @@ CHECKS = {"rows_at_least": rows_at_least}
 ROLES  = {"rows_at_least": "correctness"}   # or "presence"
 ```
 
-Local checks merge with the built-ins; a name collision is an error. Now use it in a stage
-exactly like a built-in:
+Local checks merge with the built-ins, and a name collision is an error. Now use it in a
+stage exactly like a built-in:
 
 ```yaml
 checks:
@@ -107,5 +108,5 @@ checks:
 ## Re-grading after a change
 
 Tightened a tolerance or added a stage? `toolbench regrade --run-id <id>` replays the new
-rubric against each trial's preserved `artifacts/` and rewrites the summary — no agent, no
-model spend. This is why the runner keeps a minimal evidence set per trial.
+rubric against each trial's preserved `artifacts/` and rewrites the summary, with no agent
+and no model spend. This is why the runner keeps a minimal evidence set per trial.
