@@ -37,7 +37,9 @@ See [Schemas](schemas.md) for each file's fields.
 
 ## A run directory
 
-Each `toolbench run` writes one timestamped directory:
+Each `toolbench run` writes one timestamped directory under `runs/` in your current working
+directory, so output lands next to the benchmark you ran rather than inside the installed
+package:
 
 ```
 runs/<timestamp>_<benchmark>_<model>_<label>/

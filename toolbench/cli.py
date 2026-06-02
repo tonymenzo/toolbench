@@ -65,7 +65,20 @@ from toolbench.reporting.per_stage_k import render_per_stage_k
 from toolbench.reporting.summary_text import render_run_summary
 
 
-EVAL_ROOT = Path(__file__).resolve().parent
+# Run output is written under the current working directory so `runs/`
+# sits next to the benchmarks being run, not inside the installed
+# package (which would put it in site-packages for a real install).
+# Tests override `_OUTPUT_BASE` to redirect it to a temp dir.
+_OUTPUT_BASE: Path | None = None
+
+
+def _runs_root() -> Path:
+    """Directory holding all run output, resolved at call time.
+
+    Defaults to `<cwd>/runs`; `_OUTPUT_BASE`, if set, replaces the cwd.
+    """
+    base = _OUTPUT_BASE if _OUTPUT_BASE is not None else Path.cwd()
+    return (base / "runs").resolve()
 
 
 # A trial "passes" iff every stage of the rubric passes — the
@@ -324,7 +337,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     run_label = args.run_label or ("dryrun" if args.dry_run else "run")
     run_id = f"{timestamp}_{bench_name}_{_model_slug(models[0])}_{run_label}"
-    run_dir = EVAL_ROOT / "runs" / run_id
+    run_dir = _runs_root() / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     seeds = [args.seed_base + i for i in range(args.n)]
@@ -429,7 +442,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     seeds — we don't accept overrides except `--max-cost-usd` (which can
     be widened so a partial run isn't blocked by an exhausted budget).
     """
-    run_dir = (EVAL_ROOT / "runs" / args.run_id).resolve()
+    run_dir = _runs_root() / args.run_id
     if not run_dir.exists():
         print(f"Unknown run: {args.run_id} (no dir at {run_dir})", file=sys.stderr)
         return 2
@@ -539,7 +552,7 @@ def cmd_regrade(args: argparse.Namespace) -> int:
     from toolbench.core.store import read_jsonl_gz
     from toolbench.core.trajectory import ToolCall, Trajectory
 
-    run_dir = (EVAL_ROOT / "runs" / args.run_id).resolve()
+    run_dir = _runs_root() / args.run_id
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
         print(f"No manifest in {run_dir}", file=sys.stderr)
