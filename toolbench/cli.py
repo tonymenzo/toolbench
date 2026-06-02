@@ -3,14 +3,14 @@ Command-line entry for the toolbench evaluation harness.
 
 Usage:
     toolbench run \\
-        --benchmark geometry \\
+        --benchmark examples/geometry \\
         --model claude-haiku-4-5 \\
         --loadouts core_only,full_local \\
         --n 3 \\
         --max-cost-usd 25
 
 For harness validation without LLM cost:
-    toolbench run --benchmark geometry --model stub \\
+    toolbench run --benchmark examples/geometry --model stub \\
         --loadouts core_only --n 1 --max-cost-usd 0 --dry-run
 
 `toolbench` and the short alias `tbe` are equivalent (sibling to toolbase's
@@ -57,7 +57,7 @@ from toolbench.core.harness import discover_harnesses
 from toolbench.core.loadout import discover_loadouts
 from toolbench.core.tool_resolver import build_agent_tools, release_toolbase
 from toolbench.core.variant import Variant
-from toolbench.benchmarks import BENCHMARKS
+from toolbench.core.benchmark import YamlBenchmark
 from toolbench.reporting._shared import stage_matrix_from_rows
 from toolbench.reporting.k_sweep import render_k_sweep
 from toolbench.reporting.parallel_coords import render_parallel_coords
@@ -248,13 +248,21 @@ def _print_resolution(report: dict) -> None:
         print(f"    {s['backend']} {s['config']}: {', '.join(s['tools'])}")
 
 
+def _load_benchmark(bench_dir: str | None):
+    """Load a `YamlBenchmark` from a directory path containing `benchmark.yaml`.
+    Returns None (after printing an error) when the path holds no benchmark."""
+    if bench_dir and (Path(bench_dir) / "benchmark.yaml").is_file():
+        return YamlBenchmark(bench_dir)
+    print(f"No benchmark at {bench_dir!r}: expected a directory containing "
+          "benchmark.yaml (e.g. examples/geometry).", file=sys.stderr)
+    return None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    bench_name = args.benchmark
-    if bench_name not in BENCHMARKS:
-        print(f"Unknown benchmark: {bench_name!r}. Known: {sorted(BENCHMARKS)}",
-              file=sys.stderr)
+    benchmark = _load_benchmark(args.benchmark)
+    if benchmark is None:
         return 2
-    benchmark = BENCHMARKS[bench_name]()
+    bench_name = benchmark.name
     bench_dir = benchmark.BENCHMARK_DIR
 
     # Harness(es) — default from benchmark.yaml's default_harness.
@@ -334,6 +342,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "git_sha": _git_sha(),
         "benchmark": bench_name,
+        "benchmark_dir": str(bench_dir),
         "harnesses": [{"id": h.id, "runtime": h.runtime, "provider": h.provider,
                        "core": h.core, "loop": h.loop} for h in harnesses],
         "loadouts": l_names,
@@ -430,11 +439,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         return 2
     manifest = read_json(manifest_path)
 
-    bench_name = manifest.get("benchmark") or manifest.get("task")
-    if bench_name not in BENCHMARKS:
-        print(f"Unknown benchmark in manifest: {bench_name!r}", file=sys.stderr)
+    benchmark = _load_benchmark(manifest.get("benchmark_dir"))
+    if benchmark is None:
         return 2
-    benchmark = BENCHMARKS[bench_name]()
     bench_dir = benchmark.BENCHMARK_DIR
 
     all_h = discover_harnesses(bench_dir)
@@ -539,11 +546,9 @@ def cmd_regrade(args: argparse.Namespace) -> int:
         return 2
     manifest = read_json(manifest_path)
 
-    task_name = manifest.get("benchmark") or manifest.get("task")
-    if task_name not in BENCHMARKS:
-        print(f"Unknown benchmark in manifest: {task_name!r}", file=sys.stderr)
+    benchmark = _load_benchmark(manifest.get("benchmark_dir"))
+    if benchmark is None:
         return 2
-    benchmark = BENCHMARKS[task_name]()
 
     trials_path = run_dir / "trials.jsonl"
     rows = read_jsonl(trials_path) if trials_path.exists() else []
@@ -1055,8 +1060,9 @@ def cli() -> None:
 
 @cli.command("run", short_help="Run a benchmark.")
 @click.option("--benchmark", "--task", "benchmark", required=True,
-              type=click.Choice(sorted(BENCHMARKS.keys())),
-              help="Benchmark name (directory under toolbench/benchmarks/).")
+              type=click.Path(exists=True, file_okay=False, dir_okay=True),
+              help="Path to a benchmark directory (containing benchmark.yaml), "
+                   "e.g. examples/geometry.")
 @click.option("--harness", "--harnesses", "harnesses", default=None,
               help="Comma-separated harness id(s), e.g. orchestral/anthropic. "
                    "Default: the benchmark's default_harness.")

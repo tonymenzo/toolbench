@@ -6,14 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from toolbench.benchmarks import BENCHMARKS
 from toolbench.core.checks import load_benchmark_checks, merged_registry
 from toolbench.core.judge import RuleJudge
 from toolbench.core.metrics import per_trial_reach
 from toolbench.core.trajectory import Trajectory
+from tests.helpers import GEOMETRY_DIR, load_geometry
 
 try:
-    import toolbench.bench_tools.dunderkit  # noqa: F401
     import orchestral  # noqa: F401
     HAVE_DEPS = True
 except Exception:
@@ -24,7 +23,7 @@ class TestRubricPrefixProduct(unittest.TestCase):
     """The R_j table from docs/WORKFLOWS_SIMPLE.md (W10), graded for real."""
 
     def setUp(self):
-        self.bench = BENCHMARKS["geometry"]()
+        self.bench = load_geometry()
         self.reg = merged_registry(load_benchmark_checks(self.bench.checks_module_path()))
         self.order = [s["id"] for s in self.bench.rubric.stages]
         self.weights = [float(s["weight"]) for s in self.bench.rubric.stages]
@@ -47,7 +46,7 @@ class TestRubricPrefixProduct(unittest.TestCase):
         self.assertAlmostEqual(self._reach({"distance": 5.0, "midpoint": [1.5, 2.0]}), 1.0)
 
 
-@unittest.skipUnless(HAVE_DEPS, "orchestral / toolbench.bench_tools not importable")
+@unittest.skipUnless(HAVE_DEPS, "orchestral not importable")
 class TestDryRunSmoke(unittest.TestCase):
     def test_dry_run_returns_zero(self):
         import toolbench.cli as cli
@@ -55,7 +54,7 @@ class TestDryRunSmoke(unittest.TestCase):
             orig = cli.EVAL_ROOT
             try:
                 cli.EVAL_ROOT = Path(runs)
-                rc = cli.main(["run", "--benchmark", "geometry",
+                rc = cli.main(["run", "--benchmark", str(GEOMETRY_DIR),
                                "--loadouts", "full_local",
                                "--harness", "orchestral/anthropic",
                                "--model", "stub", "--n", "1",

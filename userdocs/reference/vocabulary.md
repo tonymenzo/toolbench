@@ -20,7 +20,7 @@ The full stack from model to measurement has five layers, each with one job:
 
 Benchmark
 :   The task **plus** how to grade it: a user prompt, an optional system prompt, a sandbox
-    seed, a rubric, and ground truth. Lives in `benchmarks/<name>/benchmark.yaml`. A
+    seed, a rubric, and ground truth. Lives in `examples/<name>/benchmark.yaml`. A
     benchmark references tools and harnesses; it is not itself a toolbase artifact.
 
 Harness

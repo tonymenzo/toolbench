@@ -1,0 +1,6 @@
+name: full_local
+tools:
+  sources:
+    - python: tools/dunderkit.py     # all bundles (no `select:` = all)
+    - python: tools/euclid.py
+skills: []

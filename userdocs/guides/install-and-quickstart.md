@@ -34,7 +34,7 @@ The bundled `geometry` benchmark is self-contained. Validate the entire pipeline
 resolution, the agent loop, grading, the summary, the plots — without spending anything:
 
 ```bash
-toolbench run --benchmark geometry --model stub \
+toolbench run --benchmark examples/geometry --model stub \
     --loadouts full_local --n 1 --max-cost-usd 0 --dry-run
 ```
 
@@ -44,7 +44,7 @@ run directory written under `runs/`. A clean dry run means everything is wired.
 ## A real run
 
 ```bash
-toolbench run --benchmark geometry --model claude-haiku-4-5 \
+toolbench run --benchmark examples/geometry --model claude-haiku-4-5 \
     --loadouts core_only,full_local --n 3 --max-cost-usd 0.50
 ```
 

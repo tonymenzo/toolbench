@@ -1,8 +1,0 @@
-name: all_metrics
-tools:
-  sources:
-    - python: toolbench.bench_tools.dunderkit     # for the midpoint
-    - python: toolbench.bench_tools.euclid        # correct metric for this task -> 5.0
-    - python: toolbench.bench_tools.taxicab       # L1 -> 7.0 (wrong)
-    - python: toolbench.bench_tools.chebyshev     # L-inf -> 4.0 (wrong)
-skills: []

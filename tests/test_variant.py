@@ -10,7 +10,7 @@ from pathlib import Path
 # Ensure repo root is importable when tests are run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from toolbench.benchmarks import BENCHMARKS  # noqa: E402
+from tests.helpers import load_geometry
 from toolbench.core.variant import (  # noqa: E402,F401
     Variant,
     discover_variants,
@@ -21,7 +21,7 @@ class TestGeometryVariants(unittest.TestCase):
     """The reference math benchmark exercises the variant (scaffolding) axis."""
 
     def setUp(self):
-        self.bench = BENCHMARKS["geometry"]()
+        self.bench = load_geometry()
         self.variants = self.bench.variants
 
     def test_three_variants_discovered(self):

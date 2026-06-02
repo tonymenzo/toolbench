@@ -10,7 +10,7 @@ from toolbench.core.checks import (
     load_benchmark_roles, merged_registry, merged_roles, missing_presence,
     run_check,
 )
-from toolbench.benchmarks import BENCHMARKS
+from tests.helpers import load_geometry
 
 
 class _Tmp(unittest.TestCase):
@@ -35,7 +35,7 @@ class TestMissingPresence(_Tmp):
 
     def setUp(self):
         super().setUp()
-        self.b = BENCHMARKS["geometry"]()
+        self.b = load_geometry()
         cm = self.b.checks_module_path()
         self.reg = merged_registry(load_benchmark_checks(cm))
         self.roles = merged_roles(load_benchmark_roles(cm))

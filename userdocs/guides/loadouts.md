@@ -13,8 +13,8 @@ A loadout is an ordered list of **sources**:
 name: full_local
 tools:
   sources:
-    - python: toolbench.bench_tools.dunderkit    # all of a module's tools
-    - python: toolbench.bench_tools.euclid
+    - python: tools/dunderkit.py    # all of a module's tools
+    - python: tools/euclid.py
 skills: []
 ```
 
@@ -40,9 +40,13 @@ Each source names exactly one backend:
     ```yaml
     tools:
       sources:
-        - python: toolbench.bench_tools.dunderkit
+        - python: tools/dunderkit.py
           select: [additive]        # optional: only the `additive` bundle (or tool names)
     ```
+
+    The value is either a **relative filesystem path** (resolved against the benchmark
+    directory, so `tools/dunderkit.py` points at the benchmark's own `tools/`) or an
+    importable **dotted module path** (e.g. `mypkg.tools.dunderkit`) for an installed package.
 
 === "toolbase:"
 
@@ -74,7 +78,7 @@ silently picking one. A mixed loadout is fine:
 name: full_mixed
 tools:
   sources:
-    - python: toolbench.bench_tools.dunderkit   # local primitives
+    - python: tools/dunderkit.py   # local primitives
     - toolbase: { profile: geometry-tools }     # served domain tools
 ```
 

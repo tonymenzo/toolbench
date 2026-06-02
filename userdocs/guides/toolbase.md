@@ -40,7 +40,7 @@ production.
    this:
 
     ```yaml
-    # benchmarks/geometry/loadouts/calc_toolbase.yaml
+    # examples/geometry/loadouts/calc_toolbase.yaml
     name: calc_toolbase
     tools:
       sources:
@@ -58,7 +58,7 @@ production.
 3. **Run it** — `python:` and `toolbase:` sources can even be mixed in one loadout:
 
     ```bash
-    toolbench run --benchmark geometry --loadouts calc_toolbase \
+    toolbench run --benchmark examples/geometry --loadouts calc_toolbase \
         --models claude-haiku-4-5 --n 3 --max-cost-usd 0.50
     ```
 

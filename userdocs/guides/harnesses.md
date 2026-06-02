@@ -40,7 +40,7 @@ loop:
 ## Choosing a harness and model
 
 ```bash
-toolbench run --benchmark geometry \
+toolbench run --benchmark examples/geometry \
     --harness orchestral/anthropic \
     --models claude-haiku-4-5,claude-sonnet-4-6 \
     --loadouts full_local --n 3 --max-cost-usd 2.00

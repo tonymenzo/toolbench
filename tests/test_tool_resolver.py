@@ -1,14 +1,15 @@
 """Resolver tests: harness core + loadout python/toolbase sources.
 
-Requires orchestral (for `define_tool` tools) and the `toolbench.bench_tools`
-package on the path; skipped otherwise.
+Requires orchestral (for `define_tool` tools); the example tools come from
+the geometry benchmark's `tools/` dir, referenced by path. Skipped otherwise.
 """
 
 import tempfile
 import unittest
 
+from tests.helpers import GEOMETRY_DIR
+
 try:
-    import toolbench.bench_tools.dunderkit  # noqa: F401
     import orchestral  # noqa: F401
     HAVE_DEPS = True
 except Exception:
@@ -18,7 +19,12 @@ from toolbench.core.harness import Harness
 from toolbench.core.loadout import Loadout
 
 
-@unittest.skipUnless(HAVE_DEPS, "orchestral / toolbench.bench_tools not importable")
+def _tool(name: str) -> str:
+    """Absolute path to a geometry example tool module."""
+    return str(GEOMETRY_DIR / "tools" / f"{name}.py")
+
+
+@unittest.skipUnless(HAVE_DEPS, "orchestral not importable")
 class TestResolver(unittest.TestCase):
     def setUp(self):
         from toolbench.core import tool_resolver
@@ -34,26 +40,26 @@ class TestResolver(unittest.TestCase):
         return [self.tr._tool_name(t) for t in tools], report
 
     def test_full_local(self):
-        n, _ = self._names([{"python": "toolbench.bench_tools.dunderkit"}, {"python": "toolbench.bench_tools.euclid"}])
+        n, _ = self._names([{"python": _tool("dunderkit")}, {"python": _tool("euclid")}])
         for t in ("add", "subtract", "multiply", "divide", "power", "euclidean_distance"):
             self.assertIn(t, n)
 
     def test_select_bundle(self):
-        n, _ = self._names([{"python": "toolbench.bench_tools.dunderkit", "select": ["additive"]}])
+        n, _ = self._names([{"python": _tool("dunderkit"), "select": ["additive"]}])
         self.assertIn("add", n)
         self.assertIn("subtract", n)
         self.assertNotIn("power", n)
         self.assertNotIn("divide", n)
 
     def test_all_metrics(self):
-        n, _ = self._names([{"python": "toolbench.bench_tools.dunderkit"}, {"python": "toolbench.bench_tools.euclid"},
-                            {"python": "toolbench.bench_tools.taxicab"}, {"python": "toolbench.bench_tools.chebyshev"}])
+        n, _ = self._names([{"python": _tool("dunderkit")}, {"python": _tool("euclid")},
+                            {"python": _tool("taxicab")}, {"python": _tool("chebyshev")}])
         for t in ("euclidean_distance", "manhattan_distance", "chebyshev_distance"):
             self.assertIn(t, n)
 
     def test_collision_errors(self):
         with self.assertRaises(ValueError):
-            self._names([{"python": "toolbench.bench_tools.dunderkit"}, {"python": "toolbench.bench_tools.dunderkit"}])
+            self._names([{"python": _tool("dunderkit")}, {"python": _tool("dunderkit")}])
 
     def test_toolbase_stub_raises(self):
         with self.assertRaises(RuntimeError):
@@ -61,7 +67,7 @@ class TestResolver(unittest.TestCase):
 
     def test_bad_select_errors(self):
         with self.assertRaises(ValueError):
-            self._names([{"python": "toolbench.bench_tools.dunderkit", "select": ["nope"]}])
+            self._names([{"python": _tool("dunderkit"), "select": ["nope"]}])
 
     def test_builtin_core_supplies_nothing(self):
         h = Harness.from_dict({"runtime": {"name": "claude_code"}, "provider": {"name": "anthropic"},

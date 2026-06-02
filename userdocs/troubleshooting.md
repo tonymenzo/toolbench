@@ -5,11 +5,11 @@ Common failures and what they mean. When in doubt, run with `--dry-run --model s
 
 ## "Unknown benchmark / harness / loadout / variant"
 
-The name didn't match a discovered artifact. Benchmarks are auto-discovered from
-`toolbench/benchmarks/*/benchmark.yaml`; harnesses/loadouts/variants from the benchmark's
-own `harnesses/`, `loadouts/`, `variants/`. The error lists what *is* available — check for
-a typo or a missing file. Harness ids are the path minus `.yaml` (e.g.
-`orchestral/anthropic`).
+The benchmark is resolved from the `--benchmark` path (a directory with a
+`benchmark.yaml`, e.g. `examples/geometry`); harnesses/loadouts/variants come from the
+benchmark's own `harnesses/`, `loadouts/`, `variants/`. The error lists what *is*
+available — check the path, or for a typo or a missing file. Harness ids are the path
+minus `.yaml` (e.g. `orchestral/anthropic`).
 
 ## "the `toolbase:` source backend needs toolbase installed"
 

@@ -15,7 +15,7 @@ not just *whether* they did.
 ## Anatomy of a benchmark
 
 ```
-benchmarks/<name>/
+examples/<name>/
 ├── benchmark.yaml          # task metadata + ground truth + rubric  ← the heart
 ├── ground_truth/           # reference answers the rubric compares against
 │   └── answer.json
@@ -35,11 +35,11 @@ benchmarks/<name>/
 ```
 
 Only `benchmark.yaml`, one harness, one loadout, and one variant are strictly required.
-The bundled `geometry` benchmark is the reference to copy.
+The example `geometry` benchmark is the reference to copy.
 
 ## The workflow
 
-1. **Scaffold the directory** under `benchmarks/<name>/` (copy `geometry`).
+1. **Scaffold the directory** under `examples/<name>/` (copy `geometry`).
 2. **Write `benchmark.yaml`** — the task description, the rubric, the ground-truth pointer.
    See [Define a benchmark](define-a-benchmark.md).
 3. **Write the rubric** — ordered, weighted stages of checks.
@@ -50,12 +50,12 @@ The bundled `geometry` benchmark is the reference to copy.
    and the summary without any LLM calls.
 7. **Run small, then sweep** — a couple of cheap trials, then widen `--n` and the axes.
 
-## Auto-discovery
+## Resolving a benchmark
 
-Benchmarks are discovered automatically: any subdirectory of `toolbench/benchmarks/` with a
-`benchmark.yaml` becomes runnable under its `name` (falling back to the directory name).
-There's nothing to register — drop the directory in and `toolbench run --benchmark <name>`
-finds it.
+Benchmarks are resolved by path: any directory with a `benchmark.yaml` is runnable
+via `toolbench run --benchmark <path>` (e.g. `examples/geometry`). There's nothing
+to register — the benchmark lives wherever you put it, and the CLI loads it directly
+from the directory you point at.
 
 ## Reproducibility, for free
 

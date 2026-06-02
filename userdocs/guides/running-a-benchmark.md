@@ -8,7 +8,7 @@ against the rubric, and writes an aggregated run directory.
 
 ```bash
 toolbench run \
-    --benchmark geometry \
+    --benchmark examples/geometry \
     --models claude-haiku-4-5 \
     --loadouts core_only,full_local \
     --n 3 \
@@ -26,7 +26,7 @@ and reports one cell per `(model × condition)`:
 
 ```bash
 # Two loadouts × two models × 5 seeds = 20 trials:
-toolbench run --benchmark geometry \
+toolbench run --benchmark examples/geometry \
     --models claude-haiku-4-5,claude-sonnet-4-6 \
     --loadouts core_only,full_local \
     --n 5 --max-cost-usd 5.00
@@ -37,7 +37,7 @@ you want a clean delta (see [Reading results & scores](reading-results.md)).
 
 | Flag                              | Meaning                                                         |
 |-----------------------------------|----------------------------------------------------------------|
-| `--benchmark` / `--task`          | Benchmark name (a dir under `toolbench/benchmarks/`). Required. |
+| `--benchmark` / `--task`          | Path to a benchmark dir (with `benchmark.yaml`), e.g. `examples/geometry`. Required. |
 | `--models` / `--model`            | Comma-separated model id(s). Required. `stub` is for `--dry-run`. |
 | `--harness` / `--harnesses`       | Harness id(s), e.g. `orchestral/anthropic`. Default: benchmark's. |
 | `--loadouts` / `--conditions`     | Loadout name(s). Default: benchmark's `default_loadout`.        |
@@ -52,7 +52,7 @@ Before spending tokens, validate the entire pipeline — tool resolution, gradin
 plots — with no LLM calls:
 
 ```bash
-toolbench run --benchmark geometry --model stub \
+toolbench run --benchmark examples/geometry --model stub \
     --loadouts full_local --n 1 --max-cost-usd 0 --dry-run
 ```
 

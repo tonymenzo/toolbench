@@ -16,7 +16,7 @@ lists every flag.
 
 | Flag                          | Default            | Meaning                                                        |
 |-------------------------------|--------------------|----------------------------------------------------------------|
-| `--benchmark` / `--task`      | *(required)*       | Benchmark name (dir under `toolbench/benchmarks/`).            |
+| `--benchmark` / `--task`      | *(required)*       | Path to a benchmark dir (with `benchmark.yaml`), e.g. `examples/geometry`. |
 | `--models` / `--model`        | *(required)*       | Comma-separated model id(s). `stub` is for `--dry-run`.        |
 | `--max-cost-usd`              | *(required)*       | Hard budget cap; the run aborts when spend would exceed it.    |
 | `--harness` / `--harnesses`   | benchmark default  | Harness id(s), e.g. `orchestral/anthropic`.                   |
@@ -32,7 +32,7 @@ lists every flag.
 | `--run-label`                 | `run` / `dryrun`   | Suffix for the run id.                                         |
 
 ```bash
-toolbench run --benchmark geometry --models claude-haiku-4-5 \
+toolbench run --benchmark examples/geometry --models claude-haiku-4-5 \
     --loadouts core_only,full_local --n 5 --max-cost-usd 1.00
 ```
 

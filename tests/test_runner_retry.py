@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from toolbench.benchmarks import BENCHMARKS
+from tests.helpers import load_geometry
 from toolbench.core import runner as runner_mod
 from toolbench.core.budget import Budget
 from toolbench.core.failure_modes import MODEL_FORMAT_CRASH
@@ -91,7 +91,7 @@ class TestFormatCrashRetry(unittest.TestCase):
             return llm
 
         register_provider("crashtest", _factory)
-        self.bench = BENCHMARKS["geometry"]()
+        self.bench = load_geometry()
         bd = self.bench.BENCHMARK_DIR
         self.harness = discover_harnesses(bd)["orchestral/anthropic"]
         self.loadout = discover_loadouts(bd)["core_only"]
@@ -143,7 +143,7 @@ class TestContinueNudge(unittest.TestCase):
     deliverable exists (even if wrong)."""
 
     def setUp(self):
-        self.bench = BENCHMARKS["geometry"]()
+        self.bench = load_geometry()
         bd = self.bench.BENCHMARK_DIR
         self.harness = discover_harnesses(bd)["orchestral/anthropic"]
         self.loadout = discover_loadouts(bd)["core_only"]

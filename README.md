@@ -21,16 +21,16 @@ Requires Python ≥ 3.12. The CLI is available as both `toolbench` and the short
 
 ## Quickstart
 
-The bundled `geometry` benchmark (Euclidean distance + midpoint between two 2-D points) is a
+The example `geometry` benchmark (Euclidean distance + midpoint between two 2-D points) is a
 self-contained, dependency-free example that exercises the whole framework.
 
 ```bash
 # Validate the wiring with no LLM calls or cost:
-toolbench run --benchmark geometry --model stub \
+toolbench run --benchmark examples/geometry --model stub \
     --loadouts full_local --n 1 --max-cost-usd 0 --dry-run
 
 # A real run (a few cheap trials):
-toolbench run --benchmark geometry --model claude-haiku-4-5 \
+toolbench run --benchmark examples/geometry --model claude-haiku-4-5 \
     --loadouts core_only,full_local --n 3 --max-cost-usd 0.50
 ```
 
@@ -40,7 +40,7 @@ transcripts and artifacts, an aggregated `summary.json` / `summary.txt`, and hea
 
 ## Concepts
 
-A benchmark lives in `toolbench/benchmarks/<name>/` and is composed from four declarative
+A benchmark lives in `examples/<name>/` and is composed from four declarative
 axes — vary any of them on the command line to run an ablation:
 
 | Concept       | What it is                                                            | Where it lives          |

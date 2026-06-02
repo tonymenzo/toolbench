@@ -1,6 +1,0 @@
-name: full_local
-tools:
-  sources:
-    - python: toolbench.bench_tools.dunderkit     # all bundles (no `select:` = all)
-    - python: toolbench.bench_tools.euclid
-skills: []

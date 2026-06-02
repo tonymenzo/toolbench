@@ -33,11 +33,11 @@ without spending a cent:
 
 ```bash
 # Validate the wiring end-to-end — no LLM calls, no cost:
-toolbench run --benchmark geometry --model stub \
+toolbench run --benchmark examples/geometry --model stub \
     --loadouts full_local --n 1 --max-cost-usd 0 --dry-run
 
 # A real run: 3 trials each in two tool conditions, on a cheap model:
-toolbench run --benchmark geometry --model claude-haiku-4-5 \
+toolbench run --benchmark examples/geometry --model claude-haiku-4-5 \
     --loadouts core_only,full_local --n 3 --max-cost-usd 0.50
 ```
 

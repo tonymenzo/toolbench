@@ -48,7 +48,7 @@ values.
 ## Running a variant sweep
 
 ```bash
-toolbench run --benchmark geometry \
+toolbench run --benchmark examples/geometry \
     --variants direct,derived,polar \
     --loadouts full_local --models claude-haiku-4-5 \
     --n 5 --max-cost-usd 2.00

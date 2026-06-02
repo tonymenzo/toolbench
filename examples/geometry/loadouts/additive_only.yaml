@@ -1,6 +1,6 @@
 name: additive_only
 tools:
   sources:
-    - python: toolbench.bench_tools.dunderkit
+    - python: tools/dunderkit.py
       select: [additive]               # only add + subtract (no divide, no power)
 skills: []

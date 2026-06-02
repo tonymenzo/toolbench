@@ -11,7 +11,7 @@ escape hatch.
 Tools are `@define_tool` functions. A module exposes them in a `TOOLS` list:
 
 ```python
-# benchmarks/<name>/tools/extras.py
+# examples/<name>/tools/extras.py
 from orchestral.tools import define_tool
 
 @define_tool
@@ -23,17 +23,18 @@ TOOLS = [midpoint]
 ```
 
 Type hints become the agent-visible input schema and the docstring is what the agent reads,
-so write both for the model, not just for yourself. Point a loadout at the module by its
-import path:
+so write both for the model, not just for yourself. Point a loadout at the module by a path
+relative to the benchmark directory:
 
 ```yaml
 tools:
   sources:
-    - python: toolbench.benchmarks.<name>.tools.extras
+    - python: tools/extras.py
 ```
 
-A `python:` source also accepts a **filesystem path** to a `.py` file or package directory,
-so a tool module can live anywhere — handy while iterating.
+A `python:` source accepts either this **filesystem path** (a `.py` file or package
+directory, resolved against the benchmark dir) or a **dotted module path** for a tool that
+ships in an installed package — so a tool module can live anywhere.
 
 ## Bundles and `select:`
 

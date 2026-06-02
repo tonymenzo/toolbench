@@ -5,12 +5,12 @@ Rubric loader: shape + weights for the reference `geometry` benchmark.
 import unittest
 
 import toolbench.core.benchmark  # noqa: F401
-from toolbench.benchmarks import BENCHMARKS
+from tests.helpers import load_geometry
 
 
 class TestGeometryRubric(unittest.TestCase):
     def setUp(self):
-        self.bench = BENCHMARKS["geometry"]()
+        self.bench = load_geometry()
         self.order = [s["id"] for s in self.bench.rubric.stages]
         self.weights = [float(s["weight"]) for s in self.bench.rubric.stages]
 

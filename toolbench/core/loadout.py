@@ -30,7 +30,7 @@ class Source:
     def from_entry(cls, entry: dict, *, loadout: str) -> "Source":
         # A source entry is a mapping with exactly one *backend* key
         # (`python` or `toolbase`) plus any option siblings (e.g. `select`):
-        #   - { python: toolbench.bench_tools.dunderkit, select: [additive] }
+        #   - { python: tools/dunderkit.py, select: [additive] }
         #   - { toolbase: { toolsets: {...} } }
         if not isinstance(entry, dict):
             raise ValueError(
@@ -94,4 +94,14 @@ def load_loadout(benchmark_dir: str | Path, name: str) -> Loadout:
 def _load_file(path: Path, name: str) -> Loadout:
     with open(path) as f:
         data = yaml.safe_load(f) or {}
-    return Loadout.from_dict(data, name=name)
+    loadout = Loadout.from_dict(data, name=name)
+    # A `python:` source may name a benchmark-local module by relative path
+    # (e.g. `tools/euclid.py`). Resolve it against the benchmark dir — the
+    # parent of this `loadouts/` directory — so it works regardless of cwd.
+    bench_dir = path.parent.parent
+    for src in loadout.sources:
+        if src.backend == "python" and isinstance(src.config, str):
+            candidate = bench_dir / src.config
+            if candidate.exists():
+                src.config = str(candidate.resolve())
+    return loadout

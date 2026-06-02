@@ -88,7 +88,7 @@ The id is the path under `harnesses/` minus `.yaml` (e.g. `orchestral/anthropic`
 name: full_mixed
 tools:
   sources:
-    - python: toolbench.bench_tools.dunderkit
+    - python: tools/dunderkit.py
       select: [additive]              # optional bundle/tool allowlist
     - toolbase: { profile: my-profile }
 skills: []

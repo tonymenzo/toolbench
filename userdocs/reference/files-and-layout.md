@@ -2,24 +2,24 @@
 
 Where everything lives — the package, a benchmark, and a run directory.
 
-## The package
+The package ships the framework only; benchmarks are repo content the CLI
+resolves by path (`--benchmark <dir>`), not bundled into the package.
 
 ```
 toolbench/
 ├── toolbench/             # the package (imported as `toolbench`)
 │   ├── cli.py              # the `toolbench` / `tbe` entry point (Click)
 │   ├── core/              # framework: runner, judge, rubric, metrics, resolvers, …
-│   ├── reporting/         # summary text + plots (k-sweep, parallel-coords, per-stage)
-│   ├── bench_tools/       # reusable @define_tool math tools (dunderkit, euclid, …)
-│   └── benchmarks/        # the benchmarks themselves (auto-discovered)
-│       └── geometry/       # the bundled reference benchmark
+│   └── reporting/         # summary text + plots (k-sweep, parallel-coords, per-stage)
+├── examples/             # example benchmarks (resolved by path, not packaged)
+│   └── geometry/          # the reference benchmark (with its own tools/)
 └── runs/                  # run output (created on first run; gitignore it)
 ```
 
 ## A benchmark directory
 
 ```
-benchmarks/<name>/
+examples/<name>/
 ├── benchmark.yaml          # task + rubric + ground-truth pointer
 ├── ground_truth/           # reference answers
 ├── harnesses/<runtime>/<provider>.yaml
@@ -62,7 +62,7 @@ harness/variant/model when those axes are swept).
 
 ## What to commit vs. ignore
 
-- **Commit:** `toolbench/`, `benchmarks/<name>/` (text + small data), `pyproject.toml`, docs.
+- **Commit:** `toolbench/`, `examples/<name>/` (text + small data), `pyproject.toml`, docs.
 - **Ignore:** `runs/` (regenerated), `site/` (built docs), caches.
 
 The minimal bundle to reproduce a result is the benchmark directory plus the manifest's pin
