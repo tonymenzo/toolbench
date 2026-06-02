@@ -40,7 +40,7 @@ transcripts and artifacts, an aggregated `summary.json` / `summary.txt`, and hea
 
 ## Concepts
 
-A benchmark lives in `src/toolbench/benchmarks/<name>/` and is composed from four declarative
+A benchmark lives in `toolbench/benchmarks/<name>/` and is composed from four declarative
 axes — vary any of them on the command line to run an ablation:
 
 | Concept       | What it is                                                            | Where it lives          |

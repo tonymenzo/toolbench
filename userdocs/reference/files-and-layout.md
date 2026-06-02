@@ -6,7 +6,7 @@ Where everything lives — the package, a benchmark, and a run directory.
 
 ```
 toolbench/
-├── src/toolbench/
+├── toolbench/             # the package (imported as `toolbench`)
 │   ├── cli.py              # the `toolbench` / `tbe` entry point (Click)
 │   ├── core/              # framework: runner, judge, rubric, metrics, resolvers, …
 │   ├── reporting/         # summary text + plots (k-sweep, parallel-coords, per-stage)
@@ -62,7 +62,7 @@ harness/variant/model when those axes are swept).
 
 ## What to commit vs. ignore
 
-- **Commit:** `src/`, `benchmarks/<name>/` (text + small data), `pyproject.toml`, docs.
+- **Commit:** `toolbench/`, `benchmarks/<name>/` (text + small data), `pyproject.toml`, docs.
 - **Ignore:** `runs/` (regenerated), `site/` (built docs), caches.
 
 The minimal bundle to reproduce a result is the benchmark directory plus the manifest's pin

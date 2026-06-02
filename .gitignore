@@ -41,6 +41,9 @@ ENV/
 htmlcov/
 .hypothesis/
 
+# Claude Code local state
+.claude/
+
 # IDE
 .vscode/
 .idea/

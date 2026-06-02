@@ -56,11 +56,11 @@ Repository = "https://github.com/tonymenzo/toolbench"
 Issues = "https://github.com/tonymenzo/toolbench/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/toolbench"]
+packages = ["toolbench"]
 
 [tool.hatch.build.targets.wheel.force-include]
 # Ship the bundled benchmark's non-Python assets (YAML, prompts, ground truth).
-"src/toolbench/benchmarks" = "toolbench/benchmarks"
+"toolbench/benchmarks" = "toolbench/benchmarks"
 
 [tool.ruff]
 line-length = 100
