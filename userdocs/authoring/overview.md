@@ -2,7 +2,7 @@
 
 A benchmark is a directory of declarative files — no Python required for the common case.
 This section is for the author building a new task and grading it against LLMs. If you just
-want to *run* the bundled benchmark, start with the [guides](../guides/running-a-benchmark.md).
+want to *run* the example benchmark, start with the [guides](../guides/running-a-benchmark.md).
 
 ## The mental model
 

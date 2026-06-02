@@ -30,7 +30,7 @@ No key needed for a dry run — `--model stub` never calls a provider.
 
 ## Your first run (\$0)
 
-The bundled `geometry` benchmark is self-contained. Validate the entire pipeline — tool
+The example `geometry` benchmark is self-contained. Validate the entire pipeline — tool
 resolution, the agent loop, grading, the summary, the plots — without spending anything:
 
 ```bash

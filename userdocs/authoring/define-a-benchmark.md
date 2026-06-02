@@ -1,6 +1,6 @@
 # Define a benchmark
 
-This walks through `benchmark.yaml` and the files around it, using the bundled `geometry`
+This walks through `benchmark.yaml` and the files around it, using the example `geometry`
 benchmark as the worked example. Copy that directory and edit.
 
 ## `benchmark.yaml`

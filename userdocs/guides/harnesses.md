@@ -8,7 +8,7 @@ a fixed runtime, or compare runtimes under a fixed model.
 ## A harness file
 
 Harnesses live per benchmark under `harnesses/<runtime>/<provider>.yaml`; the id is the
-path minus `.yaml`. The bundled `geometry` benchmark ships `orchestral/anthropic`:
+path minus `.yaml`. The example `geometry` benchmark ships `orchestral/anthropic`:
 
 ```yaml
 name: orchestral/anthropic

@@ -36,7 +36,7 @@ production.
     `-a` activates it into your user `default` profile. See the
     [toolbase docs](https://toolbase-ai.com/docs/) for authoring your own toolkit.
 
-2. **Point a loadout at the profile.** The bundled `calc_toolbase` loadout does exactly
+2. **Point a loadout at the profile.** The example `calc_toolbase` loadout does exactly
    this:
 
     ```yaml
@@ -77,5 +77,5 @@ grading ever leaks into toolbase, and toolbase never needs to know a benchmark e
 The inline `toolbase: { toolsets: { ... } }` form (declaring toolkit + version + bundles
 directly in the loadout, compiled to a throwaway `.toolbase/`) is **not implemented yet**
 — it raises a clear error asking you to author a profile and use `profile:` instead. The
-bundled `full_toolbase` and `full_mixed` loadouts use that form and are placeholders until
+example `full_toolbase` and `full_mixed` loadouts use that form and are placeholders until
 it lands.
