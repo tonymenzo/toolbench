@@ -57,7 +57,7 @@ from toolbench.core.runtime import registered_runtimes
 from toolbench.core.store import append_jsonl, read_json, read_jsonl, write_json
 from toolbench.core.harness import discover_harnesses
 from toolbench.core.loadout import discover_loadouts
-from toolbench.core.tool_resolver import build_agent_tools, release_toolbase
+from toolbench.core.tool_resolver import build_agent_tools, release_sources
 from toolbench.core.variant import Variant
 from toolbench.core.benchmark import YamlBenchmark
 from toolbench.reporting._shared import stage_matrix_from_rows
@@ -280,6 +280,15 @@ def _print_resolution(report: dict) -> None:
           + (", ".join(ctools) if ctools else "(harness builtin)"))
     for s in report.get("sources", []):
         print(f"    {s['backend']} {s['config']}: {', '.join(s['tools'])}")
+        prov = s.get("provenance")
+        if prov:
+            versions = ", ".join(
+                f"{name} {info.get('version', '?')}"
+                for name, info in sorted(prov.get("toolkits", {}).items())
+            )
+            if versions:
+                print(f"      toolkit versions: {versions} "
+                      f"(toolbase {prov.get('toolbase_version', '?')})")
 
 
 def _load_benchmark(bench_dir: str | None):
@@ -438,19 +447,29 @@ def cmd_run(args: argparse.Namespace) -> int:
               f"n: {args.n} | budget: ${args.max_cost_usd}")
 
         # Resolution preview (W8): surface tool wiring up front, including any
-        # toolbase stub error, before constructing agents.
+        # toolbase/mcp connection error, before constructing agents. The
+        # resolved reports (incl. toolbase version provenance) go into the
+        # manifest so the run records exactly which toolkit versions served.
         import tempfile
+        resolution_reports: list[dict] = []
         with tempfile.TemporaryDirectory() as tmp:
             for h in harnesses:
                 for lo in loadouts:
                     try:
                         _, report = build_agent_tools(h, lo, tmp)
                         _print_resolution(report)
+                        resolution_reports.append(report)
                     except Exception as e:
                         print(f"  resolution error {h.id}/{lo.name}: {type(e).__name__}: {e}")
+                        resolution_reports.append({
+                            "harness": h.id, "loadout": lo.name,
+                            "error": f"{type(e).__name__}: {e}",
+                        })
                     finally:
-                        # Don't leave preview-started toolbase subprocesses running.
-                        release_toolbase(tmp)
+                        # Don't leave preview-started connections running.
+                        release_sources(tmp)
+        manifest["resolution"] = resolution_reports
+        write_json(run_dir / "manifest.json", manifest)
         if args.dry_run:
             print("  DRY-RUN: agent.run() will be skipped.")
 

@@ -8,14 +8,21 @@ loadout's toolkit is an ordered list of sources, each routed by backend:
 
   - `python`  : import a module (dotted name OR filesystem path) that
                 exposes `TOOLS` (and optional `BUNDLES`); apply `select:`;
-                this is the no-toolbase escape hatch.
+                this is the no-dependency escape hatch.
   - `toolbase`: resolved in-process via toolbase's orchestral bridge
-                (`toolbase.connect.orchestral.toolbase_tools`).
+                (`toolbase.connect.orchestral.toolbase_tools`); the
+                source report records each served toolkit's installed
+                version as reproducibility provenance.
+  - `mcp`     : connect to any MCP server (stdio `command:` or HTTP
+                `url:`) via orchestral's MCPClient and serve its tools.
 
 Invariants: a `select:` item must match a bundle name or a tool name
 (else error); a tool name appearing from two sources is an error.
 `build_agent_tools` returns `(tools, report)` where `report` is a
 structured account of what resolved (for the manifest and `--dry-run`).
+Sources that hold live connections (toolbase subprocesses, MCP sessions)
+stay open for the trial's lifetime; the runner calls
+`release_sources(sandbox_dir)` after grading to tear them down.
 """
 
 import contextlib
@@ -181,32 +188,37 @@ def resolve_python_source(source: Source, base_directory: str) -> list:
 
 
 # --------------------------------------------------------------------------
-# toolbase source (in-process resolution via toolbase's orchestral bridge)
+# per-sandbox lifecycle stack (shared by the toolbase and mcp backends)
 # --------------------------------------------------------------------------
-# `toolbase.connect.orchestral.toolbase_tools()` is a *context manager*: it
-# spins up one subprocess per served toolkit and tears them down on exit. A
-# trial needs those tools live for its whole run, so we hold each sandbox's
-# subprocesses open in an ExitStack keyed by the sandbox dir, and the caller
-# (the runner, or the CLI's resolution preview) calls `release_toolbase(dir)`
-# once it's done. This keeps `build_agent_tools` returning the same
-# `(tools, report)` it always has — no signature change for callers.
-_TOOLBASE_STACKS: dict[str, contextlib.ExitStack] = {}
+# Both backends hold live connections — toolbase spins up one subprocess
+# per served toolkit, MCP holds a session (subprocess or HTTP) — that a
+# trial needs open for its whole run. Each sandbox's connections live in
+# an ExitStack keyed by the sandbox dir; the caller (the runner, or the
+# CLI's resolution preview) calls `release_sources(dir)` once it's done.
+# This keeps `build_agent_tools` returning the same `(tools, report)` it
+# always has — no signature change for callers.
+_SOURCE_STACKS: dict[str, contextlib.ExitStack] = {}
 
 
-def _toolbase_stack(base_directory: str) -> contextlib.ExitStack:
-    st = _TOOLBASE_STACKS.get(base_directory)
+def _source_stack(base_directory: str) -> contextlib.ExitStack:
+    st = _SOURCE_STACKS.get(base_directory)
     if st is None:
         st = contextlib.ExitStack()
-        _TOOLBASE_STACKS[base_directory] = st
+        _SOURCE_STACKS[base_directory] = st
     return st
 
 
-def release_toolbase(base_directory: str) -> None:
-    """Tear down any toolbase subprocesses started for this sandbox. A no-op
-    when none were started, so it's always safe to call after a trial / preview."""
-    st = _TOOLBASE_STACKS.pop(base_directory, None)
+def release_sources(base_directory: str) -> None:
+    """Tear down live source connections (toolbase subprocesses, MCP
+    sessions) started for this sandbox. A no-op when none were started,
+    so it's always safe to call after a trial / preview."""
+    st = _SOURCE_STACKS.pop(base_directory, None)
     if st is not None:
         st.close()
+
+
+# Back-compat alias (pre-mcp name).
+release_toolbase = release_sources
 
 
 def resolve_toolbase_source(source: Source, base_directory: str) -> list:
@@ -250,13 +262,187 @@ def resolve_toolbase_source(source: Source, base_directory: str) -> list:
             f"Offending source: {source.config!r}"
         )
 
-    stack = _toolbase_stack(base_directory)
+    stack = _source_stack(base_directory)
     tools = list(stack.enter_context(
         toolbase_tools(profile=profile, project_root=project_root, quiet=True)
     ))
-    # toolbase curates the served set via its profile; a loadout-level `select:`
-    # would double-curate with different (namespaced) names, so it's ignored
-    # here. Scope file-aware tools to the sandbox, same as the python: path.
+    # The profile curates what toolbase serves; a loadout-level `select:`
+    # carves an ablation arm out of that served set without authoring one
+    # profile per arm. Items match the namespaced name (`toolkit__tool`)
+    # or a bare tool name when unambiguous.
+    tools = _select_namespaced(tools, source.select,
+                               label=f"toolbase:{source.config!r}")
+    # Scope file-aware tools to the sandbox, same as the python: path.
+    for t in tools:
+        _maybe_set_base_directory(t, base_directory)
+    return tools
+
+
+def _select_namespaced(tools: list, select, *, label: str) -> list:
+    """Filter served tools by `select:`. No select => everything.
+
+    An item matches the full namespaced name (`toolkit__tool`, the name
+    the agent calls) or, as a convenience, a bare upstream tool name —
+    but only when exactly one toolkit serves it. Order follows `select`;
+    an item matching nothing (or ambiguously) is an error so a typo'd
+    ablation arm fails at resolution, not as a silently-thinner loadout.
+    """
+    if not select:
+        return list(tools)
+    by_full = {}
+    for t in tools:
+        nm = _tool_name(t)
+        if nm:
+            by_full[nm.lower()] = t
+    chosen, seen = [], set()
+    for item in select:
+        key = str(item).lower()
+        tool = by_full.get(key)
+        if tool is None:
+            suffix_matches = [t for full, t in by_full.items()
+                              if full.endswith(f"__{key}")]
+            if len(suffix_matches) == 1:
+                tool = suffix_matches[0]
+            elif len(suffix_matches) > 1:
+                names = sorted(_tool_name(t) for t in suffix_matches)
+                raise ValueError(
+                    f"{label}: `select` item {item!r} is ambiguous — served "
+                    f"by {names}; use the namespaced name."
+                )
+        if tool is None:
+            raise ValueError(
+                f"{label}: `select` item {item!r} matches no served tool. "
+                f"Served: {sorted(by_full)}"
+            )
+        if id(tool) not in seen:
+            chosen.append(tool)
+            seen.add(id(tool))
+    return chosen
+
+
+def toolbase_provenance(tools: list) -> dict:
+    """Best-effort reproducibility provenance for served toolbase tools.
+
+    Maps each served toolkit (the `<toolkit>__` prefix of the namespaced
+    tool names) to the installed version that toolbase's own discovery
+    would serve (project-pin aware, else highest installed), plus its
+    environment type. Records `"unknown"` rather than raising when the
+    lookup fails — provenance must never tank a trial.
+    """
+    served = sorted({
+        nm.split("__", 1)[0]
+        for nm in ((_tool_name(t) or "") for t in tools)
+        if "__" in nm
+    })
+    out: dict = {"toolkits": {n: {"version": "unknown"} for n in served}}
+    try:
+        import importlib.metadata
+        out["toolbase_version"] = importlib.metadata.version("toolbase")
+    except Exception:
+        out["toolbase_version"] = "unknown"
+    try:
+        # The same discovery the orchestrator served from: cache walk +
+        # project-manifest pin, else highest installed version. The slot
+        # dir is `cache/<name>/<version>/`, so path.name is the version.
+        from toolbase.serve.orchestrator import discover_toolkits
+        by_name = {d.name: d for d in discover_toolkits()}
+        for name in served:
+            d = by_name.get(name)
+            if d is None:
+                continue
+            out["toolkits"][name] = {
+                "version": d.path.name,
+                "environment": d.meta.get("environment", "unknown"),
+            }
+    except Exception:
+        pass
+    return out
+
+
+# --------------------------------------------------------------------------
+# mcp source (any MCP server, via orchestral's MCPClient)
+# --------------------------------------------------------------------------
+# Test seam: tests replace this with a factory returning a fake client so
+# the backend is testable without the `mcp` package or a live server.
+def _default_mcp_client_factory(**kwargs):
+    try:
+        from orchestral.mcp import MCPClient
+    except ImportError as e:
+        raise RuntimeError(
+            "the `mcp:` source backend needs the MCP SDK "
+            "(`pip install 'toolbench[mcp]'`). "
+            f"(import error: {e})"
+        ) from e
+    return MCPClient(**kwargs)
+
+
+_MCP_CLIENT_FACTORY = _default_mcp_client_factory
+
+
+def _mcp_safe_config(cfg: dict) -> dict:
+    """The config echo for reports/manifests, secrets redacted.
+
+    `headers:` values (auth tokens) and `env:` values (API keys) are
+    replaced with `<redacted>`; keys stay visible so a run is still
+    auditable for *what* was configured without persisting credentials
+    into trial.json / manifest.json.
+    """
+    safe = dict(cfg)
+    for secret_key in ("headers", "env"):
+        if isinstance(safe.get(secret_key), dict):
+            safe[secret_key] = {k: "<redacted>" for k in safe[secret_key]}
+    return safe
+
+
+def resolve_mcp_source(source: Source, base_directory: str) -> list:
+    """Resolve an `mcp:` loadout source to orchestral tools.
+
+    `source.config` is a dict. Supported forms:
+      - `{command: [argv...], env: {...}}`   spawn a stdio MCP server
+      - `{url: URL, headers: {...}}`         connect to a remote MCP server
+      - either form: `timeout: <seconds>`    per-call/connect bound (default 60)
+
+    `${VAR}` in `url`, `command` items, `env` values, and `headers`
+    values is expanded from the environment (so tokens live in `.env`,
+    not in the loadout yaml). The client session is held open until
+    `release_sources(base_directory)` — same lifecycle as toolbase
+    subprocesses. State accumulated server-side persists across the
+    trial's calls and is torn down with the trial.
+    """
+    cfg = source.config if isinstance(source.config, dict) else {}
+    command = cfg.get("command")
+    url = cfg.get("url")
+    if bool(command) == bool(url):
+        raise RuntimeError(
+            "mcp source: give exactly one of `command:` (stdio server argv) "
+            f"or `url:` (remote server). Offending source: {cfg!r}"
+        )
+
+    def _expand(v):
+        return os.path.expandvars(v) if isinstance(v, str) else v
+
+    kwargs: dict = {"timeout": float(cfg.get("timeout", 60.0))}
+    if command:
+        if not isinstance(command, list):
+            raise RuntimeError(
+                f"mcp source: `command:` must be an argv list, got {command!r}"
+            )
+        kwargs["server_command"] = [_expand(c) for c in command]
+        if isinstance(cfg.get("env"), dict):
+            kwargs["env"] = {k: _expand(v) for k, v in cfg["env"].items()}
+    else:
+        kwargs["url"] = _expand(url)
+        if isinstance(cfg.get("headers"), dict):
+            kwargs["headers"] = {k: _expand(v) for k, v in cfg["headers"].items()}
+
+    client = _MCP_CLIENT_FACTORY(**kwargs)
+    stack = _source_stack(base_directory)
+    # MCPClient is a context manager: connect() on enter (handshake +
+    # tool discovery), disconnect() on exit.
+    stack.enter_context(client)
+    tools = list(client.get_orchestral_tools())
+    tools = _select_namespaced(tools, source.select,
+                               label=f"mcp:{cfg.get('url') or 'stdio'}")
     for t in tools:
         _maybe_set_base_directory(t, base_directory)
     return tools
@@ -299,15 +485,26 @@ def build_agent_tools(harness: Harness, loadout: Loadout,
             stools = resolve_python_source(src, base_directory)
         elif src.backend == "toolbase":
             stools = resolve_toolbase_source(src, base_directory)
+        elif src.backend == "mcp":
+            stools = resolve_mcp_source(src, base_directory)
         else:  # pragma: no cover - validated upstream
             raise ValueError(f"unknown source backend {src.backend!r}")
         label = f"{src.backend}:{src.config}"
-        report["sources"].append({
+        entry = {
             "backend": src.backend,
-            "config": src.config,
+            # The mcp config can carry credentials (headers/env) — the
+            # report lands in trial.json and the manifest, so redact.
+            "config": (_mcp_safe_config(src.config)
+                       if src.backend == "mcp" and isinstance(src.config, dict)
+                       else src.config),
             "select": src.select,
             "tools": [_tool_name(t) for t in stools],
-        })
+        }
+        if src.backend == "toolbase":
+            # Reproducibility provenance: which installed toolkit
+            # versions actually served this trial's tools.
+            entry["provenance"] = toolbase_provenance(stools)
+        report["sources"].append(entry)
         for t in stools:
             _register(t, label)
 

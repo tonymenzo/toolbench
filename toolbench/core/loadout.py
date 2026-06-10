@@ -4,9 +4,9 @@ Loadout schema + discovery.
 A *loadout* is a toolbench ablation arm: a toolkit (the tools the agent is
 equipped with, beyond the harness's core) plus optional skills. The
 toolkit is an ordered list of `sources`, each a single-key mapping whose
-key is the backend (`python` or `toolbase`) and whose value is that
-backend's config — the same key-as-discriminator shape used by rubric
-checks.
+key is the backend (`python`, `toolbase`, or `mcp`) and whose value is
+that backend's config — the same key-as-discriminator shape used by
+rubric checks.
 
 Loadouts live one file per loadout under a benchmark's `loadouts/`
 directory; the loadout's name is the filename stem.
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-VALID_BACKENDS = ("python", "toolbase")
+VALID_BACKENDS = ("python", "toolbase", "mcp")
 
 
 @dataclass
@@ -29,9 +29,12 @@ class Source:
     @classmethod
     def from_entry(cls, entry: dict, *, loadout: str) -> "Source":
         # A source entry is a mapping with exactly one *backend* key
-        # (`python` or `toolbase`) plus any option siblings (e.g. `select`):
+        # (`python` / `toolbase` / `mcp`) plus any option siblings
+        # (e.g. `select`):
         #   - { python: tools/dunderkit.py, select: [additive] }
-        #   - { toolbase: { toolsets: {...} } }
+        #   - { toolbase: { profile: my-profile } }
+        #   - { mcp: { command: ["npx", "@some/mcp-server"] } }
+        #   - { mcp: { url: "https://host/mcp" }, select: [search] }
         if not isinstance(entry, dict):
             raise ValueError(
                 f"loadout {loadout!r}: each `tools.sources` entry must be a "

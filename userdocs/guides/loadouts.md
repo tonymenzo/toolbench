@@ -51,7 +51,8 @@ Each source names exactly one backend:
 === "toolbase:"
 
     Resolve a curated set from a [toolbase](toolbase.md) profile, served in-process
-    (requires `pip install 'toolbench[toolbase]'`):
+    (requires `pip install 'toolbench[toolbase]'`). The served toolkit versions are
+    recorded in the run manifest and each trial as reproducibility provenance:
 
     ```yaml
     tools:
@@ -61,12 +62,37 @@ Each source names exactly one backend:
 
     See [Integrating toolbase](toolbase.md) for the full setup.
 
+=== "mcp:"
+
+    Connect to **any MCP server** — stdio or HTTP — via orchestral's MCP client
+    (requires `pip install 'toolbench[mcp]'`). The session stays open for the
+    trial and is torn down with it:
+
+    ```yaml
+    tools:
+      sources:
+        - mcp: { command: ["npx", "@some/mcp-server"] }       # stdio
+        - mcp:
+            url: "https://host/mcp"                            # HTTP
+            headers: { Authorization: "Bearer ${MY_TOKEN}" }
+    ```
+
+    `${VAR}` in config values expands from the environment, so tokens live in
+    `.env`, not in the yaml — and `headers:`/`env:` values are redacted in
+    everything the run persists.
+
 ## Narrowing a source with `select:`
 
-A `select:` list keeps only the named **bundles** or **tools** from a `python:` source. A
-bundle is a named group a module declares in `BUNDLES`. An item that matches neither a
-bundle nor a tool name is an error, so a typo fails loudly. With no `select:`, you get
-everything the module exposes.
+A `select:` list keeps only the named items from its source — so one source can feed
+several ablation arms without re-authoring it per arm. An item that matches nothing is an
+error, so a typo fails loudly instead of silently thinning the loadout. With no `select:`,
+you get everything the source serves. Matching per backend:
+
+| Backend     | A `select:` item matches…                                            |
+|-------------|----------------------------------------------------------------------|
+| `python:`   | a **bundle** name (from `BUNDLES`) or a tool name.                   |
+| `toolbase:` | the namespaced name (`calculator__add`) or an unambiguous bare tool name. |
+| `mcp:`      | the served tool name.                                                |
 
 ## Mixing sources
 

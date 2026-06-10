@@ -27,6 +27,8 @@ is the scannable reference. `toolbench --help` groups the commands, and `toolben
 | `--max-iterations`            | from harness       | Override `loop.max_iterations`.                                |
 | `--max-format-retries`        | from harness       | Override `loop.max_format_retries`.                            |
 | `--continue-nudges`           | from harness       | Override `loop.continue_nudges` (presence-gated resumes).      |
+| `--max-rate-limit-retries`    | from harness       | Override `loop.max_rate_limit_retries` (backoff resumes on provider 429/529). |
+| `--parallel`                  | `1`                | Trials in flight at once (each trial is self-contained).       |
 | `--dry-run`                   | off                | Skip the LLM call, validate wiring, print the resolution preview. |
 | `-v` / `--verbose`            | off                | A styled line per tool call. Honors `NO_COLOR`.               |
 | `--run-label`                 | `run` / `dryrun`   | Suffix for the run id.                                         |
@@ -42,6 +44,7 @@ toolbench run --benchmark examples/geometry --models claude-haiku-4-5 \
 |------------------|-----------------------------------------------------------------------|
 | `--run-id`       | *(required)* the existing run directory under `runs/`.                 |
 | `--max-cost-usd` | Override the manifest's budget cap (e.g. widen it). Default: original. |
+| `--parallel`     | Trials in flight at once. Default: the original run's setting.         |
 | `-v`/`--verbose` | Styled per-tool-call output.                                           |
 
 Reads the run's `manifest.json` + `trials.jsonl`, runs only the seeds not yet complete, and

@@ -51,16 +51,20 @@ axes — vary any of them on the command line to run an ablation:
 | **Variant**   | The prompt + sandbox seed (scaffolding axis), orthogonal to tools.  | `variants/<name>/`      |
 | **Rubric**    | Ordered, weighted stages of checks; trial score = prefix product.   | inside `benchmark.yaml` |
 
-A **loadout source** is either:
+A **loadout source** is one of:
 
-- `python:` — import a module exposing `TOOLS` / `make_tools()` (the no-toolbase escape hatch), or
+- `python:` — import a module exposing `TOOLS` / `make_tools()` (the no-dependency escape hatch),
 - `toolbase:` — resolve tools from a [toolbase](https://github.com/alexr314/toolbase) profile,
-  in-process (requires `toolbench[toolbase]`):
+  in-process (requires `toolbench[toolbase]`); served toolkit versions are recorded in the
+  run manifest as reproducibility provenance, or
+- `mcp:` — serve any MCP server's tools, stdio or HTTP (requires `toolbench[mcp]`):
 
   ```yaml
   tools:
     sources:
       - toolbase: { profile: my-profile }
+        select: [calculator__add]          # optional: ablate within the profile
+      - mcp: { url: "https://host/mcp", headers: { Authorization: "Bearer ${TOK}" } }
   ```
 
 ## Metrics
