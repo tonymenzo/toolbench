@@ -194,3 +194,28 @@ class TestContinueNudge(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUnconsumedLoopKeys(unittest.TestCase):
+    """A loop: key the runner doesn't consume warns loudly — a knob that
+    governs nothing must not silently mislabel a run's conditions."""
+
+    def _resolve(self, loop):
+        import contextlib, io
+        from types import SimpleNamespace
+        from toolbench.core.runner import TrialRunner
+        h = SimpleNamespace(id="t/h", loop=loop)
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            cfg = TrialRunner()._resolve_loop(h)
+        return cfg, buf.getvalue()
+
+    def test_unconsumed_key_warns(self):
+        cfg, err = self._resolve({"max_iterations": 5, "on_tool_error": "retry"})
+        self.assertEqual(cfg["max_iterations"], 5)
+        self.assertIn("on_tool_error", err)
+        self.assertIn("NO effect", err)
+
+    def test_consumed_keys_silent(self):
+        _, err = self._resolve({"max_iterations": 5, "continue_nudges": 1})
+        self.assertEqual(err, "")

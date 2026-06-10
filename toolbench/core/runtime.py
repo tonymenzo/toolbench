@@ -34,21 +34,31 @@ that have their own transcript capture, but then tool-call trajectories
 will be empty in the trial record unless the adapter bridges them.
 """
 
+import sys
 from typing import Any, Callable
 
 
 RuntimeFactory = Callable[..., Any]
 
 _RUNTIMES: dict[str, RuntimeFactory] = {}
+# runtime name -> installed distribution that implements it, used by
+# `check_runtime_version` to enforce a harness's `runtime.version` spec.
+_RUNTIME_DISTS: dict[str, str] = {}
 
 
-def register_runtime(name: str, factory: RuntimeFactory) -> None:
+def register_runtime(name: str, factory: RuntimeFactory,
+                     dist: str | None = None) -> None:
     """Register a runtime factory under `name` (case-insensitive).
 
-    Re-registering the same name silently replaces the prior factory —
-    useful for test fakes and adapter overrides.
+    `dist` names the installed distribution implementing the runtime
+    (e.g. "orchestral-ai") so a harness's `runtime.version` spec can be
+    enforced against it; omit it and version specs for this runtime are
+    skipped with a warning. Re-registering the same name silently
+    replaces the prior factory — useful for test fakes and overrides.
     """
     _RUNTIMES[name.lower()] = factory
+    if dist:
+        _RUNTIME_DISTS[name.lower()] = dist
 
 
 def registered_runtimes() -> list[str]:
@@ -75,6 +85,53 @@ def build_agent(runtime_name: str, *, llm, tools, tool_hooks,
                    system_prompt=system_prompt, display_hook=display_hook)
 
 
+def check_runtime_version(runtime_name: str, spec: str | None, *,
+                          installed: str | None = None) -> str | None:
+    """Enforce a harness's `runtime.version` spec (PEP 440, e.g. ">=1.3").
+
+    Returns an error message when the installed runtime distribution
+    does not satisfy `spec`, None when it does — or when the check can't
+    be performed (no spec; runtime registered without a `dist`; the
+    `packaging` library unavailable), in which case a stderr warning
+    notes the skip so an unenforced pin is at least visible.
+
+    `installed` overrides the metadata lookup (tests).
+    """
+    if not spec:
+        return None
+    name = runtime_name.lower()
+    if installed is None:
+        dist = _RUNTIME_DISTS.get(name)
+        if dist is None:
+            print(f"warning: runtime {runtime_name!r} was registered without "
+                  f"a `dist`; cannot enforce runtime.version {spec!r}.",
+                  file=sys.stderr)
+            return None
+        try:
+            import importlib.metadata
+            installed = importlib.metadata.version(dist)
+        except Exception:
+            return (f"runtime {runtime_name!r}: cannot read the installed "
+                    f"version of {dist!r} to enforce runtime.version {spec!r}.")
+    try:
+        from packaging.specifiers import SpecifierSet
+        from packaging.version import Version
+    except ImportError:
+        print(f"warning: `packaging` is unavailable; runtime.version {spec!r} "
+              f"for {runtime_name!r} was NOT enforced.", file=sys.stderr)
+        return None
+    try:
+        ok = SpecifierSet(str(spec)).contains(Version(installed),
+                                              prereleases=True)
+    except Exception as e:
+        return (f"runtime {runtime_name!r}: invalid runtime.version spec "
+                f"{spec!r} ({type(e).__name__}: {e}).")
+    if not ok:
+        return (f"runtime {runtime_name!r}: installed version {installed} "
+                f"does not satisfy the harness's runtime.version {spec!r}.")
+    return None
+
+
 def _orchestral_factory(*, llm, tools, tool_hooks, system_prompt,
                         display_hook=None):
     from orchestral import Agent
@@ -85,4 +142,4 @@ def _orchestral_factory(*, llm, tools, tool_hooks, system_prompt,
     )
 
 
-register_runtime("orchestral", _orchestral_factory)
+register_runtime("orchestral", _orchestral_factory, dist="orchestral-ai")

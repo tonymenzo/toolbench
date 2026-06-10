@@ -53,7 +53,7 @@ from toolbench.core.metrics import (
     pearson_corr_matrix, reach_at_k, reach_caret_k,
 )
 from toolbench.core.runner import TrialRunner
-from toolbench.core.runtime import registered_runtimes
+from toolbench.core.runtime import check_runtime_version, registered_runtimes
 from toolbench.core.store import append_jsonl, read_json, read_jsonl, write_json
 from toolbench.core.harness import discover_harnesses
 from toolbench.core.loadout import discover_loadouts
@@ -372,6 +372,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                   f"Registered: {sorted(known_runtimes)}. Register additional "
                   "runtimes via toolbench.core.runtime.register_runtime().",
                   file=sys.stderr)
+            return 2
+        # Enforce the harness's runtime.version spec against the installed
+        # runtime — a pinned-but-unenforced version would label runs with a
+        # constraint that never governed them.
+        version_err = check_runtime_version(h.runtime_name,
+                                            h.runtime.get("version"))
+        if version_err:
+            print(f"harness {h.id!r}: {version_err}", file=sys.stderr)
             return 2
 
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
