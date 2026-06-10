@@ -18,6 +18,12 @@ A loadout used a `toolbase:` source but toolbase isn't importable. Either
 to a `python:` module, the no-toolbase escape hatch. See
 [Integrating toolbase](guides/toolbase.md).
 
+## "the `mcp:` source backend needs the MCP SDK"
+
+A loadout used an `mcp:` source but the `mcp` package isn't importable. Install it with
+`pip install 'toolbench[mcp]'`. Connection failures (bad `command:`, unreachable `url:`,
+rejected auth) surface in the `--dry-run` resolution preview before any model is called.
+
 ## "the inline `toolsets:` spec is not wired yet"
 
 The `toolbase: { toolsets: { ... } }` form isn't implemented. Author a toolbase profile and

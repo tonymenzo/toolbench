@@ -40,7 +40,7 @@ from .metrics import cost_usd, per_trial_reach
 from .runtime import build_agent
 from .store import write_json, write_jsonl_gz
 from .task import Grade, Task
-from .tool_resolver import build_agent_tools, release_toolbase
+from .tool_resolver import build_agent_tools, release_sources
 from .trajectory import Trajectory, TrajectoryHook, make_agent_display_hook
 from .variant import Variant
 from toolbench.reporting.transcript import render_footer, render_header
@@ -361,10 +361,11 @@ class TrialRunner:
                 # token data we don't want to throw away.
                 self._extract_usage(agent, trajectory,
                                     configured_model=model_cfg.get("model"))
-            # Tear down any toolbase subprocesses started for this sandbox
-            # (no-op when the loadout used no `toolbase:` source). Grading
-            # only reads sandbox files, so the tools aren't needed past here.
-            release_toolbase(str(sandbox_dir))
+            # Tear down live source connections (toolbase subprocesses, MCP
+            # sessions) started for this sandbox — a no-op when the loadout
+            # used neither backend. Grading only reads sandbox files, so the
+            # tools aren't needed past here.
+            release_sources(str(sandbox_dir))
         # NB: traj_hook stays open through grading + footer emission; it is
         # closed at the end of run_trial.
 

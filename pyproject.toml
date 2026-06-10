@@ -39,6 +39,9 @@ dependencies = [
 # Closes the loop: resolve `toolbase:` loadout sources via toolbase's
 # in-process orchestral integration. Optional — `python:` sources work without it.
 toolbase = ["toolbase>=0.1.0"]
+# Serve any MCP server (stdio or HTTP) as a loadout source via
+# orchestral's MCPClient. Optional — python:/toolbase: sources work without it.
+mcp = ["mcp>=1.0"]
 dotenv = ["python-dotenv>=1.2.1"]
 docs = ["mkdocs-material>=9.5"]
 dev = [

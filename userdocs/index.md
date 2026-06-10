@@ -21,6 +21,7 @@ It is the benchmarking half of a loop whose other half is
 ```bash
 pip install toolbench                 # the framework + CLI
 pip install 'toolbench[toolbase]'     # + resolve tools from toolbase profiles
+pip install 'toolbench[mcp]'          # + serve any MCP server as a loadout source
 ```
 
 Python ≥ 3.12. The CLI is available as `toolbench` and the short alias `tbe`.

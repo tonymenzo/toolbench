@@ -92,6 +92,7 @@ loop:
   max_iterations: 150
   max_format_retries: 2
   continue_nudges: 0
+  max_rate_limit_retries: 3   # backoff resumes on provider 429/529
   on_tool_error: retry
   max_retries: 2
 ```
@@ -123,6 +124,9 @@ tools:
     - python: tools/dunderkit.py
       select: [additive]              # optional bundle/tool allowlist
     - toolbase: { profile: my-profile }
+      select: [calculator__add]       # ablate within the served profile
+    - mcp: { command: ["npx", "@some/mcp-server"], env: { TOKEN: "${MY_TOKEN}" } }
+    - mcp: { url: "https://host/mcp", headers: { Authorization: "Bearer ${TOK}" } }
 skills: []
 ```
 
@@ -130,9 +134,14 @@ skills: []
 |----------------|---------------------------------------------------------------------|
 | `tools.sources`| Ordered list. Each entry names exactly one backend.                 |
 | `python:`      | A module import path or filesystem path exposing `TOOLS`/`make_tools`. |
-| `toolbase:`    | `{profile, project_root?}`, resolved via toolbase. *(inline `toolsets:` not yet wired.)* |
-| `select:`      | Sibling of a source, keeping only these bundles/tools.              |
+| `toolbase:`    | `{profile, project_root?}`, resolved via toolbase; served toolkit versions are recorded as provenance. *(inline `toolsets:` not yet wired.)* |
+| `mcp:`         | Any MCP server: `{command: [argv...], env?}` (stdio) or `{url, headers?}` (HTTP), `timeout?` seconds. Needs `toolbench[mcp]`. |
+| `select:`      | Sibling of a source, keeping only these bundles/tools (toolbase/mcp: namespaced or unambiguous bare names). |
 | `skills:`      | Optional recipe/guide docs exposed to the agent.                    |
+
+`${VAR}` in `mcp:` config values expands from the environment, so tokens live in `.env`,
+not in the loadout yaml — and `headers:`/`env:` values are redacted in everything the run
+persists (manifest, trial.json).
 
 ## `variants/<name>/variant.yaml`
 

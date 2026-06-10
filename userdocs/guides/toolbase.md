@@ -55,6 +55,19 @@ production.
     | `toolbase: { profile: NAME, project_root: P }`| profile `NAME`, config resolved against `P`|
     | `toolbase: { project_root: P }`               | `P`'s active/default profile               |
 
+    A sibling `select:` carves an ablation arm out of the served set without
+    authoring one profile per arm — items match the namespaced name
+    (`calculator__add`) or a bare tool name when only one toolkit serves it:
+
+    ```yaml
+    sources:
+      - toolbase: { profile: default }
+        select: [calculator__add, calculator__subtract]
+    ```
+
+    A typo'd or ambiguous item is a resolution error, never a silently
+    thinner loadout.
+
 3. **Run it.** `python:` and `toolbase:` sources can even be mixed in one loadout:
 
     ```bash
@@ -64,6 +77,16 @@ production.
 
     Use `--dry-run` first. The resolution preview lists the exact tools the profile yields
     (namespaced `<toolkit>__<tool>`) before any model is called.
+
+## Version provenance
+
+Every run records *which installed toolkit versions actually served* the trial's tools:
+the resolution preview prints them (`toolkit versions: calculator 1.2.0 (toolbase
+0.5.0)`), and the same provenance block lands in the manifest's `resolution` section and
+each trial's `trial.json` under `config.tools.sources[].provenance`. Versions follow
+toolbase's own selection — the project-manifest pin when one exists, else the highest
+installed — so a reach delta measured today stays attributable when toolkit versions
+move tomorrow.
 
 ## The boundary
 
