@@ -1,8 +1,8 @@
 # Files & layout
 
-Where everything lives — the package, a benchmark, and a run directory.
+Where everything lives, across the package, a benchmark, and a run directory.
 
-The package ships the framework only; benchmarks are repo content the CLI
+The package ships the framework only. Benchmarks are repo content the CLI
 resolves by path (`--benchmark <dir>`), not bundled into the package.
 
 ```
@@ -13,7 +13,7 @@ toolbench/
 │   └── reporting/         # summary text + plots (k-sweep, parallel-coords, per-stage)
 ├── examples/             # example benchmarks (resolved by path, not packaged)
 │   └── geometry/          # the reference benchmark (with its own tools/)
-└── runs/                  # run output (created on first run; gitignore it)
+└── runs/                  # run output (created on first run, gitignore it)
 ```
 
 ## A benchmark directory
@@ -37,11 +37,13 @@ See [Schemas](schemas.md) for each file's fields.
 
 ## A run directory
 
-Each `toolbench run` writes one timestamped directory:
+Each `toolbench run` writes one timestamped directory under `runs/` in your current working
+directory, so output lands next to the benchmark you ran rather than inside the installed
+package:
 
 ```
 runs/<timestamp>_<benchmark>_<model>_<label>/
-├── manifest.json           # full config, git SHA, pinned versions — the reproducibility record
+├── manifest.json           # full config, git SHA, pinned versions, the reproducibility record
 ├── console.log             # the whole run's output, ANSI-stripped, live-tailable
 ├── trials.jsonl            # one compact line per trial
 ├── summary.json            # aggregated per-cell metrics
@@ -62,8 +64,9 @@ harness/variant/model when those axes are swept).
 
 ## What to commit vs. ignore
 
-- **Commit:** `toolbench/`, `examples/<name>/` (text + small data), `pyproject.toml`, docs.
-- **Ignore:** `runs/` (regenerated), `site/` (built docs), caches.
+- **Commit** `toolbench/`, `examples/<name>/` (text and small data), `pyproject.toml`, and
+  docs.
+- **Ignore** `runs/` (regenerated), `site/` (built docs), and caches.
 
 The minimal bundle to reproduce a result is the benchmark directory plus the manifest's pin
-set, model id, and seed — everything else is recorded in `manifest.json`.
+set, model id, and seed. Everything else is recorded in `manifest.json`.

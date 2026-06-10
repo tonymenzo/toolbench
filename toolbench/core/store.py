@@ -1,9 +1,8 @@
 """
 JSONL/JSON persistence helpers for the eval harness.
 
-The transcript format mirrors the existing
-`examples/<study>/transcripts/conversation.jsonl.gz` so that
-`scripts/jsonl_to_latex_CC.py` keeps working on eval outputs.
+Transcripts are gzipped JSONL (one record per tool call plus a final
+assistant record) so multi-thousand-call trials stay small on disk.
 """
 
 import gzip

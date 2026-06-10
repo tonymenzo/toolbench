@@ -5,6 +5,12 @@ runtime:
 provider:
   name: litellm           # routes via the LiteLLM proxy (LITELLM_HOST / LITELLM_API_KEY)
   max_tokens: 8192
+  # A LiteLLM proxy may have *response-level* caching enabled, which would
+  # hand every trial of a cell the same completion (k trials stop being
+  # independent samples). cache_bust appends a per-trial nonce to the
+  # prompt to defeat it. Off by default for direct providers: their
+  # prompt/KV caches don't affect sampling independence.
+  cache_bust: true
 core:
   tools: [RunCommandTool, WriteFileTool, ReadFileTool, RunPythonTool, TodoWrite]
 loop:

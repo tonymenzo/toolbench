@@ -21,7 +21,7 @@ shortest real run is just `--benchmark`, `--models`, and `--max-cost-usd`.
 
 ## Sweeping axes
 
-Pass a comma-separated list to any axis to sweep it; toolbench runs the full cross-product
+Pass a comma-separated list to any axis to sweep it. toolbench runs the full cross-product
 and reports one cell per `(model × condition)`:
 
 ```bash
@@ -43,13 +43,28 @@ you want a clean delta (see [Reading results & scores](reading-results.md)).
 | `--loadouts` / `--conditions`     | Loadout name(s). Default: benchmark's `default_loadout`.        |
 | `--variant` / `--variants`        | Variant name(s). Default: benchmark's `default_variant`.        |
 | `--n`                             | Trials (seeds) per cell. Default 3.                            |
-| `--seed-base`                     | Base seed; trial seeds are `seed_base + i`. Default 1001.      |
+| `--seed-base`                     | Base seed. Trial seeds are `seed_base + i`. Default 1001.      |
 | `--max-cost-usd`                  | Hard budget cap. The run aborts when spend would exceed it. Required. |
+| `--parallel`                      | Trials in flight at once. Default 1 (serial).                  |
 
-## Dry runs: validate for \$0
+Trials are scheduled *seed-major*: every cell runs its first trial before any cell runs
+its second. If the budget aborts the run mid-grid, every condition has (nearly) the same
+number of completed trials — k degrades uniformly instead of later cells being dropped
+wholesale.
 
-Before spending tokens, validate the entire pipeline — tool resolution, grading, summary,
-plots — with no LLM calls:
+## Parallel trials
+
+`--parallel N` keeps N trials in flight at once. Each trial is fully self-contained (its
+own sandbox, agent, LLM client, console.log, and toolbase subprocesses), so trials don't
+interact; the practical limits are provider rate limits and the budget check, which
+happens as each trial *finishes* — so up to N in-flight trials can complete (and bill)
+after the cap is crossed. With `--verbose`, per-tool-call lines from concurrent trials
+interleave on stdout; the per-trial `console.log`s stay clean.
+
+## Dry runs (validate for \$0)
+
+Before spending tokens, validate the entire pipeline (tool resolution, grading, summary,
+plots) with no LLM calls:
 
 ```bash
 toolbench run --benchmark examples/geometry --model stub \
@@ -58,20 +73,25 @@ toolbench run --benchmark examples/geometry --model stub \
 
 `--dry-run` prints a **resolution preview** (the exact tool list each
 harness × loadout produces, including any toolbase errors) and then skips the agent call.
-It's the fastest way to catch a broken loadout or a misspelled tool before a real run.
+It is the fastest way to catch a broken loadout or a misspelled tool before a real run.
 
 ## Loop overrides
 
-The retry/loop knobs default to each harness's `loop:` block; pass a flag to override for
+The retry/loop knobs default to each harness's `loop:` block. Pass a flag to override for
 this run:
 
-| Flag                    | Overrides                                                              |
-|-------------------------|-----------------------------------------------------------------------|
-| `--max-iterations`      | `loop.max_iterations` — the agent's tool-call round-trip cap.          |
-| `--max-format-retries`  | `loop.max_format_retries` — resumes on a malformed-tool-call crash.   |
-| `--continue-nudges`     | `loop.continue_nudges` — presence-gated "you're not done" resumes.    |
+| Flag                       | Overrides                                                              |
+|----------------------------|-----------------------------------------------------------------------|
+| `--max-iterations`         | `loop.max_iterations`, the agent's tool-call round-trip cap.          |
+| `--max-format-retries`     | `loop.max_format_retries`, resumes on a malformed-tool-call crash.   |
+| `--continue-nudges`        | `loop.continue_nudges`, presence-gated "you're not done" resumes.    |
+| `--max-rate-limit-retries` | `loop.max_rate_limit_retries`, backoff resumes on provider throttling (429/529). Default 3. |
 
-`--continue-nudges` only ever fires when a *required deliverable is still absent* — it
+Rate-limit retries exist so provider throttling — likely under `--parallel` — is
+recorded as the operational event it is (`rate_limit_retries` on the trial row, or
+`RATE_LIMITED` when exhausted) instead of contaminating the results as a model failure.
+
+`--continue-nudges` only ever fires when a *required deliverable is still absent*. It
 never consults a correctness check, so a finished-but-wrong trial is left alone and the
 grading oracle never leaks.
 
@@ -84,10 +104,10 @@ also teed to `runs/<id>/console.log`, so a backgrounded run stays live-tailable.
 
 ## Resuming and re-grading
 
-- **`toolbench resume --run-id <id>`** — pick up an interrupted run: re-reads the manifest
-  and `trials.jsonl`, runs only the seeds that didn't finish, and re-aggregates. Widen the
-  budget with `--max-cost-usd` if the original cap is exhausted.
-- **`toolbench regrade --run-id <id>`** — re-judge a finished run's preserved artifacts
+- **`toolbench resume --run-id <id>`** picks up an interrupted run. It re-reads the
+  manifest and `trials.jsonl`, runs only the seeds that didn't finish, and re-aggregates.
+  Widen the budget with `--max-cost-usd` if the original cap is exhausted.
+- **`toolbench regrade --run-id <id>`** re-judges a finished run's preserved artifacts
   after a rubric change, without re-running any agent.
 
 See [Commands](../reference/commands.md) for the full reference.

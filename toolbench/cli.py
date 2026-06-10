@@ -34,11 +34,12 @@ from typing import NamedTuple, TypedDict
 
 import click
 
-# `eval/__init__.py` inserts REPO_ROOT on `sys.path` so imports of
-# sibling repo packages (`prompts`, `config`, ...) work without
-# per-module path mangling. Adapter modules supplied by the host
-# project handle anything domain-specific (MCP path, additional
-# provider factories, tool group resolvers, ...) at import time.
+# REPO_ROOT is the directory containing the `toolbench/` package (the
+# repo checkout in an editable install). Used for the fallback `.env`
+# location and `git rev-parse`; both degrade gracefully for wheel
+# installs. Adopters wire anything deployment-specific (extra provider
+# factories, runtimes, ...) in adapter modules that call the
+# register_* hooks at import time.
 from toolbench import REPO_ROOT
 from toolbench.core.budget import Budget, BudgetExceeded
 from toolbench.core.failure_modes import (
@@ -52,6 +53,7 @@ from toolbench.core.metrics import (
     pearson_corr_matrix, reach_at_k, reach_caret_k,
 )
 from toolbench.core.runner import TrialRunner
+from toolbench.core.runtime import registered_runtimes
 from toolbench.core.store import append_jsonl, read_json, read_jsonl, write_json
 from toolbench.core.harness import discover_harnesses
 from toolbench.core.loadout import discover_loadouts
@@ -65,7 +67,20 @@ from toolbench.reporting.per_stage_k import render_per_stage_k
 from toolbench.reporting.summary_text import render_run_summary
 
 
-EVAL_ROOT = Path(__file__).resolve().parent
+# Run output is written under the current working directory so `runs/`
+# sits next to the benchmarks being run, not inside the installed
+# package (which would put it in site-packages for a real install).
+# Tests override `_OUTPUT_BASE` to redirect it to a temp dir.
+_OUTPUT_BASE: Path | None = None
+
+
+def _runs_root() -> Path:
+    """Directory holding all run output, resolved at call time.
+
+    Defaults to `<cwd>/runs`; `_OUTPUT_BASE`, if set, replaces the cwd.
+    """
+    base = _OUTPUT_BASE if _OUTPUT_BASE is not None else Path.cwd()
+    return (base / "runs").resolve()
 
 
 # A trial "passes" iff every stage of the rubric passes — the
@@ -131,9 +146,28 @@ class CellSummary(TypedDict):
     failure_modes:            dict[str, int]
 
 
+class PairedDelta(TypedDict):
+    """Per-(model × condition-pair) paired comparison over shared seeds.
+
+    `*_delta` is the mean per-seed difference (condition_b − condition_a);
+    CIs are paired bootstrap percentiles over the seed dimension —
+    tighter than differencing two per-cell CIs because shared-seed noise
+    cancels. `None` CIs mean fewer than 2 shared seeds.
+    """
+    model:            str
+    condition_a:      str
+    condition_b:      str
+    n_pairs:          int
+    reach_delta:      float
+    reach_delta_ci95: list[float] | None
+    pass_delta:       float
+    pass_delta_ci95:  list[float] | None
+
+
 class AggregateResult(TypedDict):
     """Top-level return shape of `aggregate()`. Matches `summary.json`."""
     cells:           list[CellSummary]
+    paired_deltas:   list[PairedDelta]
     n_total_trials:  int
 
 
@@ -315,16 +349,26 @@ def cmd_run(args: argparse.Namespace) -> int:
               file=sys.stderr)
 
     known_providers = set(registered_providers())
+    known_runtimes = set(registered_runtimes())
     for h in harnesses:
         if h.provider_name not in known_providers:
             print(f"harness {h.id!r} names unknown provider {h.provider_name!r}. "
                   f"Registered: {sorted(known_providers)}", file=sys.stderr)
             return 2
+        # Validate the runtime too — without this, a harness claiming an
+        # unimplemented runtime (claude_code, ...) would silently run on
+        # whatever the runner defaults to, mislabeling the whole run.
+        if h.runtime_name not in known_runtimes:
+            print(f"harness {h.id!r} names unknown runtime {h.runtime_name!r}. "
+                  f"Registered: {sorted(known_runtimes)}. Register additional "
+                  "runtimes via toolbench.core.runtime.register_runtime().",
+                  file=sys.stderr)
+            return 2
 
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     run_label = args.run_label or ("dryrun" if args.dry_run else "run")
     run_id = f"{timestamp}_{bench_name}_{_model_slug(models[0])}_{run_label}"
-    run_dir = EVAL_ROOT / "runs" / run_id
+    run_dir = _runs_root() / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     seeds = [args.seed_base + i for i in range(args.n)]
@@ -359,6 +403,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "max_iterations": args.max_iterations,
         "max_format_retries": args.max_format_retries,
         "continue_nudges": args.continue_nudges,
+        "max_rate_limit_retries": args.max_rate_limit_retries,
+        "parallel": args.parallel,
         "dry_run": args.dry_run,
         "versions": {"orchestral-ai": _pkg_version("orchestral-ai"),
                      "toolbench": _pkg_version("toolbench")},
@@ -379,6 +425,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         litellm_pricing=litellm_pricing,
         max_format_retries=args.max_format_retries,
         max_continue_nudges=args.continue_nudges,
+        max_rate_limit_retries=args.max_rate_limit_retries,
     )
 
     # Tee all run output into a single clean run-level console.log (in
@@ -407,11 +454,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         if args.dry_run:
             print("  DRY-RUN: agent.run() will be skipped.")
 
+        if args.parallel > 1 and args.verbose:
+            print(f"  note: --parallel {args.parallel} with --verbose: "
+                  "per-tool-call lines from concurrent trials will interleave "
+                  "on stdout (per-trial console.logs stay clean).")
         new_records, aborted_globally = _run_trial_loop(
             benchmark=benchmark, harnesses=harnesses, loadouts=loadouts,
             variants=variants, models=models, seeds=seeds, run_dir=run_dir,
             runner=runner, budget=budget, completed=set(),
-            dry_run=args.dry_run,
+            dry_run=args.dry_run, parallel=args.parallel,
         )
 
         _finalize_run(run_dir=run_dir, manifest=manifest, budget=budget,
@@ -429,7 +480,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     seeds — we don't accept overrides except `--max-cost-usd` (which can
     be widened so a partial run isn't blocked by an exhausted budget).
     """
-    run_dir = (EVAL_ROOT / "runs" / args.run_id).resolve()
+    run_dir = _runs_root() / args.run_id
     if not run_dir.exists():
         print(f"Unknown run: {args.run_id} (no dir at {run_dir})", file=sys.stderr)
         return 2
@@ -501,6 +552,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         litellm_pricing=manifest.get("litellm_pricing"),
         max_format_retries=manifest.get("max_format_retries"),
         max_continue_nudges=manifest.get("continue_nudges"),
+        max_rate_limit_retries=manifest.get("max_rate_limit_retries"),
     )
 
     print(f"Resume: {args.run_id}")
@@ -512,6 +564,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         variants=variants, models=models, seeds=seeds, run_dir=run_dir,
         runner=runner, budget=budget, completed=completed,
         dry_run=manifest.get("dry_run", False),
+        parallel=(args.parallel if args.parallel is not None
+                  else manifest.get("parallel", 1)),
     )
 
     _finalize_run(run_dir=run_dir, manifest=manifest, budget=budget,
@@ -526,9 +580,9 @@ def cmd_regrade(args: argparse.Namespace) -> int:
     """Re-run the full rubric judge against an existing run's preserved
     artifacts.
 
-    Sandbox cleanup keeps the minimum evidence each check needs (UFO
-    `.py`, `.lhe(.gz)`, `.npy`, plots, and the first 200 records of each
-    `.jsonl`; see `runner.KEEP_*`), so the judge can be replayed verbatim:
+    Sandbox cleanup keeps the minimum evidence each check needs (per the
+    benchmark's `artifacts:` policy; see `core/artifact_policy.py`), so
+    the judge can be replayed verbatim:
     each trial's trajectory is reconstructed from `transcript.jsonl.gz`
     and graded against `artifacts/` with the *current* `benchmark.yaml`
     rubric. Rubric edits (new checks, tightened params) take full effect.
@@ -539,7 +593,7 @@ def cmd_regrade(args: argparse.Namespace) -> int:
     from toolbench.core.store import read_jsonl_gz
     from toolbench.core.trajectory import ToolCall, Trajectory
 
-    run_dir = (EVAL_ROOT / "runs" / args.run_id).resolve()
+    run_dir = _runs_root() / args.run_id
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
         print(f"No manifest in {run_dir}", file=sys.stderr)
@@ -657,40 +711,34 @@ def _row_reach(stages: dict, stage_order: list[str],
     return out / total
 
 
-def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
-                    run_dir, runner, budget, completed,
-                    dry_run=False) -> tuple[list[dict], bool]:
-    """Run every (harness × loadout × variant × model × seed) cell not in
-    `completed`. Append each finished trial to trials.jsonl as it lands
-    so a later resume sees it. Returns (new_records, aborted)."""
+def _build_work_items(*, harnesses, loadouts, variants, models, seeds,
+                      completed) -> list[dict]:
+    """Enumerate every (harness × loadout × variant × model × seed) trial
+    not in `completed`, in *seed-major* (round-robin) order.
+
+    Seed index is the outermost loop deliberately: when a budget abort
+    cuts the run short, every cell has completed (nearly) the same number
+    of trials — k degrades uniformly across conditions instead of the
+    later cells of the grid being dropped wholesale, which would make
+    cross-condition comparisons unbalanced exactly when budget is tight.
+    """
     multi_h = len(harnesses) > 1
     multi_v = len(variants) > 1
     multi_m = len(models) > 1
-    new_records: list[dict] = []
-    aborted = False
-    for h in harnesses:
-        if aborted:
-            break
-        for lo in loadouts:
-            if aborted:
-                break
-            for v in variants:
-                if aborted:
-                    break
-                # Cell key for aggregation. Single-axis runs keep their old
-                # shape (lo.name); each additional swept axis is appended
-                # with `|`. Variant goes after loadout so reports group by
-                # loadout first, then variant.
-                cond_parts = ([h.id] if multi_h else []) + [lo.name]
-                if multi_v:
-                    cond_parts.append(v.name)
-                condition = "|".join(cond_parts)
-                for m in models:
-                    if aborted:
-                        break
-                    model_cfg = {"provider": h.provider_name, "model": m,
-                                 "dry_run": dry_run}
-                    for i, seed in enumerate(seeds):
+    items: list[dict] = []
+    for i, seed in enumerate(seeds):
+        for h in harnesses:
+            for lo in loadouts:
+                for v in variants:
+                    # Cell key for aggregation. Single-axis runs keep their
+                    # old shape (lo.name); each additional swept axis is
+                    # appended with `|`. Variant goes after loadout so
+                    # reports group by loadout first, then variant.
+                    cond_parts = ([h.id] if multi_h else []) + [lo.name]
+                    if multi_v:
+                        cond_parts.append(v.name)
+                    condition = "|".join(cond_parts)
+                    for m in models:
                         if (h.id, lo.name, v.name, m, seed) in completed:
                             continue
                         parts = ([h.id.replace("/", "-")] if multi_h else []) + [lo.name]
@@ -699,60 +747,119 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
                         if multi_m:
                             parts.append(_model_slug(m))
                         trial_id = "__".join(parts) + f"__n{i:03d}__seed{seed}"
-                        print(f"  -> trial {trial_id} "
-                              f"(spent: ${budget.spent:.4f}, "
-                              f"remaining: ${budget.remaining:.4f})")
-                        base_row = {"trial_id": trial_id, "model": m,
-                                    "harness": h.id, "loadout": lo.name,
-                                    "variant": v.name, "condition": condition,
-                                    "seed": seed}
-                        try:
-                            result = runner.run_trial(
-                                model_cfg=model_cfg, benchmark=benchmark,
-                                harness=h, loadout=lo, variant=v, seed=seed,
-                                trial_id=trial_id, run_dir=run_dir,
-                                budget=budget,
-                            )
-                        except BudgetExceeded as e:
-                            print(f"  ABORT: {e}")
-                            aborted = True
-                            break
-                        except Exception as e:
-                            # e.g. a (stubbed) toolbase source, or an import error:
-                            # record a failed trial and keep going.
-                            print(f"  trial {trial_id} could not run: "
-                                  f"{type(e).__name__}: {e}", file=sys.stderr)
-                            row = {**base_row, "ok": False, "score": 0.0,
-                                   "stages": {}, "wall_clock_s": 0.0,
-                                   "input_tokens": 0, "output_tokens": 0,
-                                   "cache_read_tokens": 0, "cost_usd": 0.0,
-                                   "tool_calls": 0,
-                                   "failure_mode": "resolution_error",
-                                   "aborted_by_budget": False}
-                            new_records.append(row)
-                            append_jsonl(run_dir / "trials.jsonl", row)
-                            continue
-                        row = {
-                            **base_row,
-                            "ok": result.ok,
-                            "score": result.score,
-                            "stages": result.grade.stages,
-                            "wall_clock_s": round(result.wall_clock_s, 2),
-                            "input_tokens": result.trajectory.tokens.get("input", 0),
-                            "output_tokens": result.trajectory.tokens.get("output", 0),
-                            "cache_read_tokens": result.trajectory.tokens.get("cache_read", 0),
-                            "cost_usd": round(result.cost_usd, 6) if result.cost_usd is not None else None,
-                            "tool_calls": len(result.trajectory.tool_calls),
-                            "failure_mode": result.grade.failure_mode,
-                            "attempts": result.attempts,
-                            "nudges": result.nudges,
-                            "aborted_by_budget": result.aborted_by_budget,
-                        }
-                        new_records.append(row)
-                        append_jsonl(run_dir / "trials.jsonl", row)
-                        if result.aborted_by_budget:
-                            aborted = True
-                            break
+                        items.append({
+                            "harness": h, "loadout": lo, "variant": v,
+                            "model": m, "seed": seed,
+                            "trial_id": trial_id, "condition": condition,
+                        })
+    return items
+
+
+def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
+                    run_dir, runner, budget, completed,
+                    dry_run=False, parallel=1) -> tuple[list[dict], bool]:
+    """Run every trial not in `completed`, appending each finished trial
+    to trials.jsonl as it lands so a later resume sees it. Returns
+    (new_records, aborted).
+
+    `parallel` is the number of trials in flight at once. Each trial is
+    fully self-contained (own sandbox, agent, LLM client, console.log,
+    toolbase subprocesses), and rows are appended from this thread only,
+    so the only shared mutable state is the lock-protected Budget. Note
+    the budget is charged when a trial *finishes*: with parallel > 1, up
+    to `parallel` in-flight trials can still complete (and bill) after
+    the cap is crossed before the abort takes effect.
+    """
+    import concurrent.futures as cf
+    import threading
+
+    items = _build_work_items(harnesses=harnesses, loadouts=loadouts,
+                              variants=variants, models=models, seeds=seeds,
+                              completed=completed)
+    new_records: list[dict] = []
+    aborted = False
+    # Budget-abort signal. NB: deliberately NOT executor.shutdown(
+    # cancel_futures=True) — a future cancelled while queued never gets
+    # set_running_or_notify_cancel() called (its work item is discarded),
+    # stays CANCELLED instead of CANCELLED_AND_NOTIFIED, and as_completed
+    # blocks on it forever. Instead every future runs; launched-after-
+    # abort trials return None immediately and are skipped.
+    abort = threading.Event()
+
+    def _execute(it: dict) -> dict | None:
+        if abort.is_set():
+            return None   # budget abort: don't start this trial
+        h, lo, v = it["harness"], it["loadout"], it["variant"]
+        m, seed, trial_id = it["model"], it["seed"], it["trial_id"]
+        print(f"  -> trial {trial_id} "
+              f"(spent: ${budget.spent:.4f}, "
+              f"remaining: ${budget.remaining:.4f})")
+        base_row = {"trial_id": trial_id, "model": m,
+                    "harness": h.id, "loadout": lo.name,
+                    "variant": v.name, "condition": it["condition"],
+                    "seed": seed}
+        model_cfg = {"provider": h.provider_name, "model": m,
+                     "dry_run": dry_run}
+        try:
+            result = runner.run_trial(
+                model_cfg=model_cfg, benchmark=benchmark,
+                harness=h, loadout=lo, variant=v, seed=seed,
+                trial_id=trial_id, run_dir=run_dir,
+                budget=budget,
+            )
+        except BudgetExceeded:
+            raise
+        except Exception as e:
+            # e.g. a (stubbed) toolbase source, or an import error:
+            # record a failed trial and keep going.
+            print(f"  trial {trial_id} could not run: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
+            return {**base_row, "ok": False, "score": 0.0,
+                    "stages": {}, "wall_clock_s": 0.0,
+                    "input_tokens": 0, "output_tokens": 0,
+                    "cache_read_tokens": 0, "cost_usd": 0.0,
+                    "tool_calls": 0,
+                    "failure_mode": "resolution_error",
+                    "aborted_by_budget": False}
+        return {
+            **base_row,
+            "ok": result.ok,
+            "score": result.score,
+            "stages": result.grade.stages,
+            "wall_clock_s": round(result.wall_clock_s, 2),
+            "input_tokens": result.trajectory.tokens.get("input", 0),
+            "output_tokens": result.trajectory.tokens.get("output", 0),
+            "cache_read_tokens": result.trajectory.tokens.get("cache_read", 0),
+            "cost_usd": round(result.cost_usd, 6) if result.cost_usd is not None else None,
+            "tool_calls": len(result.trajectory.tool_calls),
+            "resolved_model": result.trajectory.resolved_model,
+            "failure_mode": result.grade.failure_mode,
+            "attempts": result.attempts,
+            "nudges": result.nudges,
+            "rate_limit_retries": result.rate_limit_retries,
+            "aborted_by_budget": result.aborted_by_budget,
+        }
+
+    with cf.ThreadPoolExecutor(max_workers=max(1, int(parallel))) as ex:
+        futures = [ex.submit(_execute, it) for it in items]
+        for fut in cf.as_completed(futures):
+            try:
+                row = fut.result()
+            except BudgetExceeded as e:
+                if not aborted:
+                    print(f"  ABORT: {e}")
+                aborted = True
+                abort.set()
+                continue
+            if row is None:
+                continue   # skipped: launched after the abort
+            # Rows are recorded here (the submitting thread) only, so
+            # trials.jsonl appends never interleave.
+            new_records.append(row)
+            append_jsonl(run_dir / "trials.jsonl", row)
+            if row.get("aborted_by_budget") and not aborted:
+                aborted = True
+                abort.set()
     return new_records, aborted
 
 
@@ -879,7 +986,90 @@ def aggregate(trials: list[dict], k: int,
             "stages": _stages_breakdown(rows),
             "failure_modes": _count_failures(rows),
         })
-    return {"cells": cell_summaries, "n_total_trials": len(trials)}
+    return {
+        "cells": cell_summaries,
+        "paired_deltas": _paired_deltas(trials, stage_order, stage_weights),
+        "n_total_trials": len(trials),
+    }
+
+
+def _paired_deltas(trials: list[dict],
+                   stage_order: list[str] | None = None,
+                   stage_weights: dict[str, float] | None = None
+                   ) -> list[dict]:
+    """Paired per-seed condition deltas, per model.
+
+    For every pair of conditions sharing seeds under the same model,
+    compute the per-seed difference of reach (and of pass) and a paired
+    bootstrap CI over the seed dimension. This is the right uncertainty
+    for ablation claims ("Δreach for model M with vs without the
+    loadout"): conditions share seeds, so per-seed noise cancels in the
+    difference — differencing two independent per-cell CIs would
+    overstate the uncertainty.
+
+    Delta direction is `condition_b − condition_a`, with conditions
+    ordered by first appearance in `trials` (i.e. the CLI's order).
+    Duplicate (condition, seed) rows are averaged before pairing.
+    """
+    if stage_order is None:
+        for t in trials:
+            s = t.get("stages") or {}
+            if s:
+                stage_order = list(s.keys())
+                break
+    if not stage_order:
+        return []
+    weights = ([stage_weights.get(sid, 0.0) for sid in stage_order]
+               if stage_weights is not None else [1.0] * len(stage_order))
+
+    # model -> condition -> seed -> list[(reach, passed)]
+    by_model: dict[str, dict[str, dict[object, list[tuple[float, int]]]]] = {}
+    cond_order: list[str] = []
+    for t in trials:
+        seed = t.get("seed")
+        if seed is None:
+            continue
+        cond = t["condition"]
+        if cond not in cond_order:
+            cond_order.append(cond)
+        reach = _row_reach(t.get("stages") or {}, stage_order, weights)
+        by_model.setdefault(t["model"], {}).setdefault(cond, {}) \
+                .setdefault(seed, []).append((reach, _trial_passed(t)))
+
+    def _avg(vals: list[tuple[float, int]], idx: int) -> float:
+        return sum(v[idx] for v in vals) / len(vals)
+
+    out: list[dict] = []
+    for model, conds in by_model.items():
+        ordered = [c for c in cond_order if c in conds]
+        for i in range(len(ordered)):
+            for j in range(i + 1, len(ordered)):
+                a, b = ordered[i], ordered[j]
+                shared = sorted(set(conds[a]) & set(conds[b]), key=str)
+                if not shared:
+                    continue
+                reach_d = [_avg(conds[b][s], 0) - _avg(conds[a][s], 0)
+                           for s in shared]
+                pass_d = [_avg(conds[b][s], 1) - _avg(conds[a][s], 1)
+                          for s in shared]
+                entry: dict = {
+                    "model": model, "condition_a": a, "condition_b": b,
+                    "n_pairs": len(shared),
+                    "reach_delta": round(mean(reach_d), 4),
+                    "pass_delta": round(mean(pass_d), 4),
+                }
+                if len(shared) >= 2:
+                    # Bootstrapping the per-seed delta list IS the paired
+                    # bootstrap: each resample draws seeds, not trials.
+                    _, lo, hi = bootstrap_ci(reach_d, seed=0xFEED)
+                    entry["reach_delta_ci95"] = [round(lo, 4), round(hi, 4)]
+                    _, lo, hi = bootstrap_ci(pass_d, seed=0xFEED)
+                    entry["pass_delta_ci95"] = [round(lo, 4), round(hi, 4)]
+                else:
+                    entry["reach_delta_ci95"] = None
+                    entry["pass_delta_ci95"] = None
+                out.append(entry)
+    return out
 
 
 def _stage_matrix(rows: list[dict],
@@ -1049,7 +1239,11 @@ def cli() -> None:
     (prompt + sandbox), run N trials per cell against a model, and report
     reach / pass@k / pass^k metrics.
     """
-    # Load .env (provider keys + tool config paths) before anything reads os.environ.
+    # Load .env (provider keys + tool config paths) before anything reads
+    # os.environ. cwd first (works for wheel installs, where REPO_ROOT
+    # points inside site-packages), then the repo checkout; real
+    # environment variables always win over either file (setdefault).
+    _load_env_file(Path.cwd() / ".env")
     _load_env_file(REPO_ROOT / ".env")
     # Silence tool progress bars (tqdm) when output isn't an interactive
     # terminal — i.e. backgrounded/redirected runs — so captured logs stay
@@ -1088,6 +1282,13 @@ def cli() -> None:
               help="Override the harness loop.max_format_retries: on a "
                    "MODEL_FORMAT_CRASH (malformed tool-call JSON), resume the "
                    "same session this many times. Default: from the harness.")
+@click.option("--max-rate-limit-retries", "max_rate_limit_retries", type=int,
+              default=None,
+              help="Override the harness loop.max_rate_limit_retries: on a "
+                   "provider 429/529 (throttled / overloaded), back off and "
+                   "resume the same session this many times before recording "
+                   "the trial as RATE_LIMITED. Default: from the harness "
+                   "(hard default 3).")
 @click.option("--continue-nudges", "continue_nudges", type=int, default=None,
               help="Override the harness loop.continue_nudges: if the model "
                    "self-terminates with a required deliverable still absent "
@@ -1095,6 +1296,12 @@ def cli() -> None:
                    "'you haven't finished' nudge this many times. Never fires "
                    "when the deliverable exists (no oracle leakage); recorded "
                    "per trial. Default: from the harness.")
+@click.option("--parallel", "parallel", type=int, default=1, show_default=True,
+              help="Trials in flight at once. Each trial is self-contained "
+                   "(own sandbox/agent/LLM client), so this is safe; mind "
+                   "provider rate limits, and note the budget cap is checked "
+                   "as trials finish, so up to N in-flight trials can complete "
+                   "after the cap is crossed.")
 @click.option("--dry-run", "dry_run", is_flag=True, default=False,
               help="Skip the actual LLM call; validate harness wiring only.")
 @click.option("-v", "--verbose", "verbose", is_flag=True, default=False,
@@ -1114,6 +1321,9 @@ def _run(**kw) -> int:
               help="Override the manifest's budget cap (e.g. widen it to absorb "
                    "additional trials). Defaults to the original cap from "
                    "manifest.json.")
+@click.option("--parallel", "parallel", type=int, default=None,
+              help="Trials in flight at once. Defaults to the original run's "
+                   "--parallel from manifest.json.")
 @click.option("-v", "--verbose", "verbose", is_flag=True, default=False,
               help="Print a stylish line per tool call.")
 def _resume(**kw) -> int:

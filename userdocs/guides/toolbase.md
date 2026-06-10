@@ -2,15 +2,15 @@
 
 [toolbase](https://toolbase-ai.com) is the package manager and runtime for agent tools.
 A loadout's `toolbase:` source resolves a curated set of tools from a toolbase **profile**,
-in-process, and hands them to the agent — so you can benchmark exactly the tools your
-users would get from `tb serve`. This closes the loop: author and serve in toolbase, then
+in-process, and hands them to the agent, so you can benchmark exactly the tools your
+users would get from `tb serve`. This closes the loop. Author and serve in toolbase, then
 measure here.
 
 !!! note "Optional dependency"
-    The `toolbase:` backend needs toolbase installed: `pip install 'toolbench[toolbase]'`
-    (or an editable checkout of toolbase next door). Without it, a `toolbase:` source
-    raises a clear error pointing you back to the `python:` escape hatch — `python:`
-    loadouts always work with no toolbase at all.
+    The `toolbase:` backend needs toolbase installed via `pip install
+    'toolbench[toolbase]'` (or an editable checkout of toolbase next door). Without it, a
+    `toolbase:` source raises a clear error pointing you back to the `python:` escape
+    hatch. `python:` loadouts always work with no toolbase at all.
 
 ## How it works
 
@@ -25,8 +25,8 @@ production.
 ## Setup
 
 1. **Install a toolkit and activate it into a profile.** toolbench ships a small
-   `calculator` toolkit under `examples/calculator` (basic arithmetic + a scientific
-   bundle — enough to compute the `geometry` task's distance and midpoint):
+   `calculator` toolkit under `examples/calculator` (basic arithmetic plus a scientific
+   bundle, enough to compute the `geometry` task's distance and midpoint):
 
     ```bash
     tb install -e examples/calculator -g -a   # editable install + activate (user scope)
@@ -55,27 +55,27 @@ production.
     | `toolbase: { profile: NAME, project_root: P }`| profile `NAME`, config resolved against `P`|
     | `toolbase: { project_root: P }`               | `P`'s active/default profile               |
 
-3. **Run it** — `python:` and `toolbase:` sources can even be mixed in one loadout:
+3. **Run it.** `python:` and `toolbase:` sources can even be mixed in one loadout:
 
     ```bash
     toolbench run --benchmark examples/geometry --loadouts calc_toolbase \
         --models claude-haiku-4-5 --n 3 --max-cost-usd 0.50
     ```
 
-    Use `--dry-run` first: the resolution preview lists the exact tools the profile yields
+    Use `--dry-run` first. The resolution preview lists the exact tools the profile yields
     (namespaced `<toolkit>__<tool>`) before any model is called.
 
 ## The boundary
 
-toolbase owns *the tools* — installing, isolating, curating, serving. toolbench owns
-*the measurement* — the task, rubric, harness, model, and metrics. A loadout's
-`toolbase:` source is the single seam between them; nothing about the model, prompt, or
+toolbase owns *the tools*, meaning installing, isolating, curating, and serving. toolbench
+owns *the measurement*, meaning the task, rubric, harness, model, and metrics. A loadout's
+`toolbase:` source is the single seam between them. Nothing about the model, prompt, or
 grading ever leaks into toolbase, and toolbase never needs to know a benchmark exists.
 
 ## Not yet wired
 
 The inline `toolbase: { toolsets: { ... } }` form (declaring toolkit + version + bundles
-directly in the loadout, compiled to a throwaway `.toolbase/`) is **not implemented yet**
-— it raises a clear error asking you to author a profile and use `profile:` instead. The
+directly in the loadout, compiled to a throwaway `.toolbase/`) is **not implemented yet**.
+It raises a clear error asking you to author a profile and use `profile:` instead. The
 example `full_toolbase` and `full_mixed` loadouts use that form and are placeholders until
 it lands.

@@ -1,13 +1,13 @@
 # Harnesses & models
 
-A **harness** is the agent runtime: it drives the tool-call loop, manages context, talks to
+A **harness** is the agent runtime. It drives the tool-call loop, manages context, talks to
 a provider, and supplies the **core tools** (file I/O, shell, run-python). The **model** is
 chosen separately on the command line. Keeping them apart means you can sweep models under
 a fixed runtime, or compare runtimes under a fixed model.
 
 ## A harness file
 
-Harnesses live per benchmark under `harnesses/<runtime>/<provider>.yaml`; the id is the
+Harnesses live per benchmark under `harnesses/<runtime>/<provider>.yaml`, and the id is the
 path minus `.yaml`. The example `geometry` benchmark ships `orchestral/anthropic`:
 
 ```yaml
@@ -28,13 +28,13 @@ loop:
   max_retries: 2
 ```
 
-- **`runtime`** — the agent framework and a PEP 440 version constraint, checked at trial
+- **`runtime`** is the agent framework and a PEP 440 version constraint, checked at trial
   setup.
-- **`provider`** — the LLM provider plus default request params. The *model id* comes from
+- **`provider`** is the LLM provider plus default request params. The *model id* comes from
   `--models`, not from here.
-- **`core`** — either a `tools:` list of runtime primitives, **or** `builtin: true` for a
+- **`core`** is either a `tools:` list of runtime primitives **or** `builtin: true` for a
   runtime that ships its own (e.g. `claude-code`). Exactly one of the two.
-- **`loop`** — the retry/iteration policy. These are the defaults the CLI's
+- **`loop`** is the retry/iteration policy. These are the defaults the CLI's
   `--max-iterations` / `--max-format-retries` / `--continue-nudges` flags override.
 
 ## Choosing a harness and model
@@ -53,7 +53,7 @@ runtimes (the harness id becomes part of the condition label).
 
 The provider named in a harness must be registered. toolbench ships factories for
 `anthropic`, `openai`, `google`, `groq`, and `litellm`, plus `stub` (the zero-cost
-dry-run LLM). Provider API keys come from the environment (or a `.env` at the repo root);
+dry-run LLM). Provider API keys come from the environment, or a `.env` at the repo root.
 `litellm` additionally reads a pricing snapshot so cost is reported even when the proxy
 doesn't return it. To add your own runtime or provider, see
 [Custom tools & providers](../authoring/custom-tools.md).
@@ -61,6 +61,6 @@ doesn't return it. To add your own runtime or provider, see
 ## Core tools vs. loadout tools
 
 The agent's full toolset is **harness core ∪ loadout**. The harness supplies general
-primitives every task needs (write a file, run a script); the [loadout](loadouts.md)
+primitives every task needs (write a file, run a script), and the [loadout](loadouts.md)
 supplies the *domain* tools you're actually measuring. A tool name may not be provided by
-both at once — toolbench errors on a collision so a run is never silently ambiguous.
+both at once. toolbench errors on a collision so a run is never silently ambiguous.

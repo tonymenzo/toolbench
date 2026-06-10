@@ -18,13 +18,14 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestral import Agent
 from orchestral.tools.hooks import TruncateOutputHook
 
+from .artifact_policy import DEFAULT_POLICY, ArtifactPolicy
 from .budget import Budget, BudgetExceeded
 from .crash_classifier import classify_crash
 from .failure_modes import (
     AGENT_CRASH, GRADE_ERROR, MODEL_FORMAT_CRASH, MODEL_STOPPED_EARLY, NONE,
+    RATE_LIMITED,
 )
 from .checks import (
     load_benchmark_checks, load_benchmark_roles, merged_registry, merged_roles,
@@ -36,6 +37,7 @@ from .litellm_pricing import cost_from_proxy
 from .llm_factory import StubLLM, build_llm
 from .loadout import Loadout
 from .metrics import cost_usd, per_trial_reach
+from .runtime import build_agent
 from .store import write_json, write_jsonl_gz
 from .task import Grade, Task
 from .tool_resolver import build_agent_tools, release_toolbase
@@ -45,55 +47,22 @@ from toolbench.reporting.transcript import render_footer, render_header
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are an expert physicist. Solve the task carefully and verify your work."
+    "You are an expert assistant. Solve the task carefully and verify your work."
 )
 
 
-# Sandbox cleanup keeps the *minimum evidence* each rubric check
-# needs to be re-run later via `toolbench.cli regrade`. Path-preserving
-# copy into trials/<id>/artifacts/, then the entire sandbox is
-# deleted.
-#
-# Three classes:
-#   FULL: copy verbatim. Small files where any truncation would
-#         break the corresponding rubric check or the headline
-#         deliverable itself.
-#   TRUNCATED: bulk record-oriented files we keep only the first N
-#              records of, enough to clear the schema + min-record
-#              gates without keeping multi-MB-per-file dumps.
-#   (everything else): deleted with the sandbox.
-KEEP_EXTENSIONS_FULL = (
-    ".pdf", ".png",         # headline plots / agent-side figures
-    ".npy",                 # reconstructed mass arrays
-    ".py",                  # UFO module files + agent's plotting scripts
-    ".lhe", ".lhe.gz",      # MadGraph parton-level events (gzipped is small)
-    ".json",                # structured answers (e.g. output/answer.json)
-)
-
-# Files truncated to N records and copied to artifacts/.
-# (extension, max_records).
-TRUNCATED_EXTENSIONS = (
-    (".jsonl", 200),        # events.jsonl + jets.jsonl headers; >100 needed
-)
-
-# Bare-name files at the sandbox root we always preserve.
-KEEP_ROOT_FILES = ("todos.md",)
+# Harness `provider:` keys that configure toolbench itself rather than
+# the model request. Everything else in the provider block is forwarded
+# as a request parameter on every model call (e.g. max_tokens).
+_PROVIDER_CONTROL_KEYS = ("name", "cache_bust")
 
 # Tool-call argument keys that carry agent-authored source code. The
 # code-executing core tools (RunPythonTool and friends) run an
 # *ephemeral temp file outside the sandbox*, so the scripts the agent
-# actually wrote during the task — its reconstruction, selection and
-# plotting code — never land in the sandbox and would be lost at
-# cleanup. We lift them out of the trajectory into artifacts/scripts/.
+# actually wrote during the task never land in the sandbox and would be
+# lost at cleanup. We lift them out of the trajectory into
+# artifacts/scripts/.
 CODE_ARG_KEYS = ("code", "script", "source", "program")
-
-# Path segments owned by third-party tools (not the agent and not a
-# graded deliverable): MadGraph dumps its entire interpreter under
-# `<output>/bin/internal/`, ~40 .py files that would otherwise be
-# swept up by the `.py` FULL rule and bury the agent's own output.
-# The top-level UFO dir still satisfies the `ufo_dir` check, so
-# pruning these does not affect regrade.
-MACHINERY_PATH_SEGMENTS = ("bin/internal",)
 
 
 def _warn(prefix: str, exc: BaseException) -> None:
@@ -121,14 +90,25 @@ class TrialResult:
     cost_usd: float | None
     aborted_by_budget: bool
     error: str | None
-    attempts: int = 1   # 1 + number of MODEL_FORMAT_CRASH retries
-    nudges: int = 0     # presence-gated continue-nudges issued
+    attempts: int = 1            # 1 + number of MODEL_FORMAT_CRASH retries
+    nudges: int = 0              # presence-gated continue-nudges issued
+    rate_limit_retries: int = 0  # RATE_LIMITED backoff resumes used
 
 
 # Hard fallbacks for the orchestral loop knobs, used only when a harness's
 # `loop:` block omits them (and no CLI override is given).
 _LOOP_DEFAULTS = {"max_iterations": 150, "max_format_retries": 2,
-                  "continue_nudges": 0}
+                  "continue_nudges": 0, "max_rate_limit_retries": 3}
+
+# Backoff schedule for RATE_LIMITED resumes (seconds per retry; the last
+# entry repeats if a harness allows more retries than entries). Generous
+# on purpose: a 429/529 means the provider wants us to back off, and a
+# wasted minute is far cheaper than a wasted trial.
+_RATE_LIMIT_BACKOFF_S = (10, 30, 60)
+
+# Indirection so tests can patch the sleep without touching the global
+# time module (parallel trials sleep in their own worker threads).
+_sleep = time.sleep
 
 
 class TrialRunner:
@@ -137,7 +117,8 @@ class TrialRunner:
                  verbose: bool = False,
                  litellm_pricing: dict | None = None,
                  max_format_retries: int | None = None,
-                 max_continue_nudges: int | None = None):
+                 max_continue_nudges: int | None = None,
+                 max_rate_limit_retries: int | None = None):
         self.judge = judge
         self.verbose = verbose
         # Loop knobs are OVERRIDES: None means "defer to the harness's `loop:`
@@ -151,9 +132,13 @@ class TrialRunner:
         #     terminates with a required deliverable still absent. Default 0
         #     (strict autonomy); never fires when the deliverable exists, so
         #     no oracle leakage.
+        #   - max_rate_limit_retries: RATE_LIMITED resumes (provider 429/529;
+        #     operational, retried with backoff so throttling doesn't get
+        #     recorded as a model failure).
         self.max_iterations = max_iterations
         self.max_format_retries = max_format_retries
         self.max_continue_nudges = max_continue_nudges
+        self.max_rate_limit_retries = max_rate_limit_retries
         # Optional snapshot of {model_name: {input, cache_read, output}}
         # captured from the litellm proxy at run start. Used as a cost
         # fallback when the proxy doesn't populate `usage.cost`.
@@ -168,6 +153,7 @@ class TrialRunner:
             ("max_iterations", self.max_iterations),
             ("max_format_retries", self.max_format_retries),
             ("continue_nudges", self.max_continue_nudges),
+            ("max_rate_limit_retries", self.max_rate_limit_retries),
         ):
             if override is not None:
                 out[key] = int(override)
@@ -191,6 +177,7 @@ class TrialRunner:
         max_iterations = loop_cfg["max_iterations"]
         max_format_retries = loop_cfg["max_format_retries"]
         max_continue_nudges = loop_cfg["continue_nudges"]
+        max_rate_limit_retries = loop_cfg["max_rate_limit_retries"]
 
         # Per-variant scaffolding: the variant owns the prompts and the
         # sandbox seed (the things that change between difficulty rungs);
@@ -202,6 +189,12 @@ class TrialRunner:
             model=model_cfg.get("model"),
             dry_run=model_cfg.get("dry_run", False),
         )
+        # Harness-declared request params (max_tokens, temperature, ...):
+        # everything in the provider block except toolbench's own control
+        # keys. Forwarded on every agent.run() call — orchestral passes
+        # them through to the provider API per request.
+        llm_kwargs = {k: v for k, v in (harness.provider or {}).items()
+                      if k not in _PROVIDER_CONTROL_KEYS}
 
         # Tools = harness core ∪ loadout toolkit.
         tools, tool_report = build_agent_tools(harness, loadout, str(sandbox_dir))
@@ -237,9 +230,18 @@ class TrialRunner:
             print(header, flush=True)
         traj_hook.write_to_log(header)
 
-        # Per-trial nonce so identical sandboxes don't all cache-hit on the
-        # upstream LiteLLM proxy (defeating independent sampling).
-        prompt = f"{prompt_base}\n\n<!-- trial: {trial_id} seed: {seed} -->"
+        # Cache-busting nonce, opt-in via `provider: {cache_bust: true}`.
+        # Needed ONLY for routes with *response-level* caching (e.g. a
+        # LiteLLM proxy with caching enabled), where identical requests
+        # can return the identical completion and the k trials of a cell
+        # stop being independent samples. Provider prompt/KV caches
+        # (Anthropic, OpenAI) only reuse prefix computation — sampling
+        # stays stochastic — so they don't need this, and by default the
+        # model sees the prompt verbatim with no trial metadata appended.
+        if (harness.provider or {}).get("cache_bust"):
+            prompt = f"{prompt_base}\n\n<!-- trial: {trial_id} seed: {seed} -->"
+        else:
+            prompt = prompt_base
 
         t0 = time.monotonic()
         error: str | None = None
@@ -247,8 +249,9 @@ class TrialRunner:
         agent = None
         last_response = None         # Final Message returned by agent.run().
         crash_exc: BaseException | None = None
-        format_retries = 0   # MODEL_FORMAT_CRASH resumes used (serialization)
-        nudges = 0           # presence-gated continue-nudges issued
+        format_retries = 0       # MODEL_FORMAT_CRASH resumes used (serialization)
+        nudges = 0               # presence-gated continue-nudges issued
+        rate_limit_retries = 0   # RATE_LIMITED backoff resumes used
         try:
             if isinstance(llm, StubLLM):
                 # Dry-run: skip the LLM call entirely. Persist a minimal
@@ -257,9 +260,13 @@ class TrialRunner:
                 trajectory.final_response = "[dry-run: agent.run skipped]"
             else:
                 display_hook = make_agent_display_hook(traj_hook) if self.verbose else None
-                agent = Agent(
+                # Construct the agent via the runtime registry — the
+                # harness's `runtime.name` picks the implementation
+                # (validated against the registry by the CLI up front).
+                agent = build_agent(
+                    harness.runtime_name or "orchestral",
                     llm=llm, tools=tools, tool_hooks=hooks,
-                    system_prompt=system_prompt, debug=False,
+                    system_prompt=system_prompt,
                     display_hook=display_hook,
                 )
                 # One resume loop over the SAME agent / sandbox / context.
@@ -277,14 +284,16 @@ class TrialRunner:
                     crash_exc = None
                     error = None
                     try:
-                        response = agent.run(message, max_iterations=max_iterations)
+                        response = agent.run(message, max_iterations=max_iterations,
+                                             **llm_kwargs)
                         last_response = response
                         trajectory.final_response = getattr(response, "text", "") or str(response)
                     except Exception as e:
                         crash_exc = e
                         error = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
                         traj_hook.write_to_log("\n--- agent crash ---\n" + error)
-                        if (classify_crash(e, error)[0] == MODEL_FORMAT_CRASH
+                        crash_kind = classify_crash(e, error)[0]
+                        if (crash_kind == MODEL_FORMAT_CRASH
                                 and format_retries < max_format_retries):
                             format_retries += 1
                             note = (f"\n--- retry {format_retries}/{max_format_retries} "
@@ -302,7 +311,28 @@ class TrialRunner:
                                 "(escape newlines as \\n and quotes as \\\"), then "
                                 "continue.")
                             continue
-                        break  # unrecoverable crash, or format-retries exhausted
+                        if (crash_kind == RATE_LIMITED
+                                and rate_limit_retries < max_rate_limit_retries):
+                            # Provider throttling is operational, not a model
+                            # failure — back off and resume the same session so
+                            # a 429/529 burst doesn't contaminate the results.
+                            delay = _RATE_LIMIT_BACKOFF_S[
+                                min(rate_limit_retries,
+                                    len(_RATE_LIMIT_BACKOFF_S) - 1)]
+                            rate_limit_retries += 1
+                            note = (f"\n--- retry {rate_limit_retries}/"
+                                    f"{max_rate_limit_retries} after RATE_LIMITED "
+                                    f"(backing off {delay}s, resuming same session) ---")
+                            if self.verbose:
+                                print(note, flush=True)
+                            traj_hook.write_to_log(note)
+                            _sleep(delay)
+                            message = (
+                                "The previous request was interrupted by a temporary "
+                                "provider error (rate limit). Continue the task from "
+                                "where you left off.")
+                            continue
+                        break  # unrecoverable crash, or retries exhausted
 
                     # Deliberate stop (no exception). Presence-gated nudge: resume
                     # ONLY if a required deliverable is absent — never on a
@@ -451,6 +481,7 @@ class TrialRunner:
             "cost_usd": trajectory.cost_usd,
             "attempts": attempts,
             "nudges": nudges,
+            "rate_limit_retries": rate_limit_retries,
             "aborted_by_budget": aborted,
             "error": error,
             "artifacts": {
@@ -475,7 +506,27 @@ class TrialRunner:
         write_jsonl_gz(trial_dir / "transcript.jsonl.gz", transcript_records)
 
         self._cleanup_sandbox(sandbox_dir, trial_dir,
-                              tool_calls=trajectory.tool_calls)
+                              tool_calls=trajectory.tool_calls,
+                              policy=getattr(benchmark, "artifact_policy", None))
+
+        # Regrade-safety audit: the artifacts dir is all `regrade` will
+        # ever see, so re-run the judge against it and warn loudly if any
+        # stage that just passed would flip — that means the benchmark's
+        # artifact policy fails to preserve a file its own rubric reads.
+        try:
+            replay = judge.grade(trajectory, benchmark.rubric,
+                                 str(trial_dir / "artifacts"))
+            flips = [sid for sid, ok in grade.stages.items()
+                     if ok and not replay.stages.get(sid)]
+            if flips:
+                print(
+                    f"warning: trial {trial_id}: stage(s) {flips} passed in the "
+                    "sandbox but FAIL against the preserved artifacts — the "
+                    "benchmark's `artifacts:` policy is missing a file its "
+                    "rubric reads; `toolbench regrade` would flip these.",
+                    file=sys.stderr)
+        except Exception as exc:
+            _warn("artifact regrade audit", exc)
 
         return TrialResult(
             trial_id=trial_id,
@@ -489,9 +540,10 @@ class TrialRunner:
             error=error,
             attempts=attempts,
             nudges=nudges,
+            rate_limit_retries=rate_limit_retries,
         )
 
-    def _extract_usage(self, agent: Agent, trajectory: Trajectory,
+    def _extract_usage(self, agent, trajectory: Trajectory,
                        *, configured_model: str | None = None) -> None:
         """Pull token + cost totals from agent.context.
 
@@ -535,6 +587,10 @@ class TrialRunner:
                 "cache_read": tot_cache_read,
                 "cache_creation": tot_cache_creation,
             })
+            # The snapshot the provider actually served (may be a dated
+            # version of the configured alias) — kept as reproducibility
+            # evidence on the trial record.
+            trajectory.resolved_model = model_name
             if had_cost:
                 trajectory.cost_usd = round(tot_cost, 6)
             else:
@@ -602,22 +658,25 @@ class TrialRunner:
 
     @staticmethod
     def _cleanup_sandbox(sandbox_dir: Path, trial_dir: Path,
-                         tool_calls=()) -> None:
+                         tool_calls=(), policy: ArtifactPolicy | None = None) -> None:
         """Copy minimum-regrade evidence to trial_dir/artifacts/, then
         nuke the sandbox.
 
-        Keep-classes:
-          0. scripts/             — agent-authored code lifted from the
+        What survives is governed by `policy` (the benchmark's
+        `artifacts:` block, or `artifact_policy.DEFAULT_POLICY`):
+
+          0. scripts/           — agent-authored code lifted from the
              trajectory (RunPythonTool runs temp files outside the
              sandbox, so this is the only place they're preserved).
-          1. KEEP_EXTENSIONS_FULL — verbatim copy.
-          2. TRUNCATED_EXTENSIONS — copy first N records (sufficient for
+          1. policy.keep_full   — verbatim copy.
+          2. policy.truncate    — copy first N records (sufficient for
              rubric content_check schema + min_records gates without
              keeping the full multi-MB record dumps).
-          3. KEEP_ROOT_FILES      — bare-name files at sandbox root.
+          3. policy.keep_root   — bare-name files at sandbox root.
 
         Everything else gets nuked with the sandbox.
         """
+        policy = policy or DEFAULT_POLICY
         artifacts_dir = trial_dir / "artifacts"
         artifacts_dir.mkdir(exist_ok=True)
 
@@ -632,14 +691,14 @@ class TrialRunner:
             if "__pycache__" in p.parts:
                 return True
             posix = p.as_posix()
-            if any(seg in posix for seg in MACHINERY_PATH_SEGMENTS):
+            if any(seg in posix for seg in policy.exclude_segments):
                 return True
             return False
 
         # Class 1: full copy. Use rglob so the agent's chosen layout
         # is preserved (e.g. data/run01/ stays at data/run01/).
         seen_full: set[Path] = set()
-        for ext in KEEP_EXTENSIONS_FULL:
+        for ext in policy.keep_full:
             for src in sandbox_dir.rglob(f"*{ext}"):
                 if not src.is_file() or src in seen_full or _skip(src):
                     continue
@@ -653,7 +712,7 @@ class TrialRunner:
                     _warn(f"artifact preserve (full) {src.name}", exc)
 
         # Class 2: truncated copies of bulk record-oriented files.
-        for ext, max_records in TRUNCATED_EXTENSIONS:
+        for ext, max_records in policy.truncate:
             for src in sandbox_dir.rglob(f"*{ext}"):
                 if not src.is_file() or _skip(src):
                     continue
@@ -666,7 +725,7 @@ class TrialRunner:
                     _warn(f"artifact preserve (truncated) {src.name}", exc)
 
         # Class 3: bare-name root files.
-        for name in KEEP_ROOT_FILES:
+        for name in policy.keep_root:
             src = sandbox_dir / name
             if src.is_file():
                 try:

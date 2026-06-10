@@ -51,9 +51,9 @@ class TestDryRunSmoke(unittest.TestCase):
     def test_dry_run_returns_zero(self):
         import toolbench.cli as cli
         with tempfile.TemporaryDirectory() as runs:
-            orig = cli.EVAL_ROOT
+            orig = cli._OUTPUT_BASE
             try:
-                cli.EVAL_ROOT = Path(runs)
+                cli._OUTPUT_BASE = Path(runs)
                 rc = cli.main(["run", "--benchmark", str(GEOMETRY_DIR),
                                "--loadouts", "full_local",
                                "--harness", "orchestral/anthropic",
@@ -62,7 +62,7 @@ class TestDryRunSmoke(unittest.TestCase):
                 # a manifest was written under the redirected runs dir
                 manifests = list(Path(runs).rglob("manifest.json"))
             finally:
-                cli.EVAL_ROOT = orig
+                cli._OUTPUT_BASE = orig
         self.assertEqual(rc, 0)
         self.assertTrue(manifests)
 

@@ -1,13 +1,13 @@
 # Loadouts & tools
 
 A **loadout** is the set of domain tools the agent is equipped with, beyond the harness
-core. It is the most common ablation axis: holding everything else fixed and swapping the
-loadout tells you *what the tools are worth*.
+core. It is the most common ablation axis. Hold everything else fixed and swap the
+loadout to learn *what the tools are worth*.
 
 ## A loadout file
 
-Loadouts live per benchmark under `loadouts/<name>.yaml`; the name is the filename stem.
-A loadout is an ordered list of **sources**:
+Loadouts live per benchmark under `loadouts/<name>.yaml`, and the name is the filename
+stem. A loadout is an ordered list of **sources**:
 
 ```yaml
 name: full_local
@@ -18,7 +18,7 @@ tools:
 skills: []
 ```
 
-The empty loadout — only the harness core — is the natural baseline:
+The empty loadout, only the harness core, is the natural baseline:
 
 ```yaml
 name: core_only
@@ -34,7 +34,7 @@ Each source names exactly one backend:
 
     Import a module that exposes a `TOOLS` list (and optional `BUNDLES`), or a
     `make_tools(base_directory, select=...)` factory. This is the **no-toolbase escape
-    hatch** — author tools as plain `@define_tool` functions and point a loadout straight
+    hatch**. Author tools as plain `@define_tool` functions and point a loadout straight
     at the module:
 
     ```yaml
@@ -61,17 +61,17 @@ Each source names exactly one backend:
 
     See [Integrating toolbase](toolbase.md) for the full setup.
 
-## `select:` — narrowing a source
+## Narrowing a source with `select:`
 
 A `select:` list keeps only the named **bundles** or **tools** from a `python:` source. A
-bundle is a named group a module declares in `BUNDLES`; an item that matches neither a
-bundle nor a tool name is an error (so a typo fails loudly). With no `select:`, you get
+bundle is a named group a module declares in `BUNDLES`. An item that matches neither a
+bundle nor a tool name is an error, so a typo fails loudly. With no `select:`, you get
 everything the module exposes.
 
 ## Mixing sources
 
 Sources compose, and the agent's final toolset is `harness core ∪ all sources`. The same
-tool name may not come from two sources — toolbash errors on a collision rather than
+tool name may not come from two sources. toolbase errors on a collision rather than
 silently picking one. A mixed loadout is fine:
 
 ```yaml
@@ -84,7 +84,7 @@ tools:
 
 ## Skills
 
-A loadout may also expose **skills** — short recipe/guide documents the agent can consult.
+A loadout may also expose **skills**, short recipe/guide documents the agent can consult.
 The `geometry` benchmark's `guided` loadout pairs the basic arithmetic tools with a
 `distance_recipe` skill that teaches assembling a distance from primitives, so you can
 measure whether the *guidance* (rather than a dedicated tool) is enough.

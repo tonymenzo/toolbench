@@ -27,6 +27,10 @@ trajectory):
                             context window; the provider rejected the
                             request (HTTP 400 / context_length_exceeded).
                             Operational, not a capability failure.
+  - `RATE_LIMITED`        — the provider throttled or shed the request
+                            (HTTP 429 / overloaded) and the runner's
+                            bounded backoff retries were exhausted.
+                            Operational, not a capability failure.
   - `MODEL_STOPPED_EARLY` — model produced an assistant message
                             instead of issuing the next expected tool
                             call (no exception, but no progress).
@@ -50,6 +54,7 @@ UNKNOWN = "UNKNOWN"
 AGENT_CRASH             = "AGENT_CRASH"
 MODEL_FORMAT_CRASH      = "MODEL_FORMAT_CRASH"
 CONTEXT_LENGTH_EXCEEDED = "CONTEXT_LENGTH_EXCEEDED"
+RATE_LIMITED            = "RATE_LIMITED"
 MODEL_STOPPED_EARLY     = "MODEL_STOPPED_EARLY"
 GRADE_ERROR             = "GRADE_ERROR"
 
@@ -62,7 +67,8 @@ INCOMPLETE_AT_PREFIX = "INCOMPLETE_AT_"
 # *not* here: stopping early can still leave gradeable artifacts and
 # regrade may legitimately upgrade it to NONE / INCOMPLETE_AT_<id>.
 HARD_PROCESS_FAILURES: frozenset[str] = frozenset({
-    AGENT_CRASH, MODEL_FORMAT_CRASH, CONTEXT_LENGTH_EXCEEDED, GRADE_ERROR,
+    AGENT_CRASH, MODEL_FORMAT_CRASH, CONTEXT_LENGTH_EXCEEDED, RATE_LIMITED,
+    GRADE_ERROR,
 })
 
 

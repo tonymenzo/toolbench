@@ -8,7 +8,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from toolbench.core.crash_classifier import classify_crash  # noqa: E402
 from toolbench.core.failure_modes import (  # noqa: E402
-    AGENT_CRASH, CONTEXT_LENGTH_EXCEEDED, MODEL_FORMAT_CRASH,
+    AGENT_CRASH, CONTEXT_LENGTH_EXCEEDED, MODEL_FORMAT_CRASH, RATE_LIMITED,
 )
 
 
@@ -108,6 +108,51 @@ class TestContextLengthCrash(unittest.TestCase):
         exc = RuntimeError("Error code: 400 - invalid model parameter 'foo'")
         mode, _ = classify_crash(exc, "")
         self.assertEqual(mode, AGENT_CRASH)
+
+
+class TestRateLimitCrash(unittest.TestCase):
+    def test_sdk_exception_type_name(self):
+        # Both the OpenAI and Anthropic SDKs raise `RateLimitError` —
+        # match on the type name, no SDK import needed.
+        class RateLimitError(Exception):
+            pass
+        mode, reason = classify_crash(RateLimitError("slow down"), "")
+        self.assertEqual(mode, RATE_LIMITED)
+        self.assertIn("throttled", reason)
+
+    def test_anthropic_429_message(self):
+        exc = RuntimeError(
+            "Error code: 429 - {'type': 'error', 'error': "
+            "{'type': 'rate_limit_error', 'message': 'Number of request "
+            "tokens has exceeded your per-minute rate limit'}}")
+        mode, _ = classify_crash(exc, "")
+        self.assertEqual(mode, RATE_LIMITED)
+
+    def test_anthropic_overloaded_529(self):
+        exc = RuntimeError(
+            "Error code: 529 - {'type': 'error', 'error': "
+            "{'type': 'overloaded_error', 'message': 'Overloaded'}}")
+        mode, _ = classify_crash(exc, "")
+        self.assertEqual(mode, RATE_LIMITED)
+
+    def test_openai_quota_message(self):
+        exc = RuntimeError(
+            "You exceeded your current quota: insufficient_quota")
+        mode, _ = classify_crash(exc, "")
+        self.assertEqual(mode, RATE_LIMITED)
+
+    def test_unrelated_number_does_not_match(self):
+        # '429' embedded in a longer token must not classify.
+        exc = RuntimeError("array index 14290 out of bounds for seed4290")
+        mode, _ = classify_crash(exc, "")
+        self.assertEqual(mode, AGENT_CRASH)
+
+    def test_format_crash_wins_over_rate_limit_text(self):
+        # A JSON decode error from the tool-call parser stays a format
+        # crash even if the bad payload happens to mention rate limits.
+        exc = _make_jdce('{"msg": "rate limit', msg="Unterminated string")
+        mode, _ = classify_crash(exc, _GPT_OSS_TRACEBACK)
+        self.assertEqual(mode, MODEL_FORMAT_CRASH)
 
 
 class TestGenericCrash(unittest.TestCase):

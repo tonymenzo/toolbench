@@ -1,21 +1,21 @@
 # Troubleshooting
 
-Common failures and what they mean. When in doubt, run with `--dry-run --model stub` first
-— it reproduces wiring problems for \$0 and prints the resolution preview.
+Common failures and what they mean. When in doubt, run with `--dry-run --model stub` first.
+It reproduces wiring problems for \$0 and prints the resolution preview.
 
 ## "Unknown benchmark / harness / loadout / variant"
 
 The benchmark is resolved from the `--benchmark` path (a directory with a
-`benchmark.yaml`, e.g. `examples/geometry`); harnesses/loadouts/variants come from the
-benchmark's own `harnesses/`, `loadouts/`, `variants/`. The error lists what *is*
-available — check the path, or for a typo or a missing file. Harness ids are the path
+`benchmark.yaml`, e.g. `examples/geometry`). Harnesses, loadouts, and variants come from the
+benchmark's own `harnesses/`, `loadouts/`, and `variants/`. The error lists what *is*
+available, so check the path, or for a typo or a missing file. Harness ids are the path
 minus `.yaml` (e.g. `orchestral/anthropic`).
 
 ## "the `toolbase:` source backend needs toolbase installed"
 
 A loadout used a `toolbase:` source but toolbase isn't importable. Either
 `pip install 'toolbench[toolbase]'` (or install an editable toolbase), or switch the source
-to a `python:` module — the no-toolbase escape hatch. See
+to a `python:` module, the no-toolbase escape hatch. See
 [Integrating toolbase](guides/toolbase.md).
 
 ## "the inline `toolsets:` spec is not wired yet"
@@ -27,13 +27,13 @@ reference it as `toolbase: { profile: NAME }` instead. The example `full_toolbas
 ## "tool name collision: 'X' provided by both …"
 
 Two sources (or a source and the harness core) expose the same tool name. The agent's
-toolset must be unambiguous — drop one source, or `select:` a narrower set so the name
+toolset must be unambiguous, so drop one source, or `select:` a narrower set so the name
 appears once.
 
 ## "`select` item 'X' matches no bundle nor tool"
 
 A `select:` entry didn't match any bundle in the module's `BUNDLES` or any tool name. The
-error lists the available bundles and tools — fix the typo. (Selects fail loudly on
+error lists the available bundles and tools, so fix the typo. (Selects fail loudly on
 purpose, so a silent empty toolset never happens.)
 
 ## A run aborts immediately on budget
@@ -50,9 +50,9 @@ anything reads `os.environ`. Set the key your harness's provider needs
 
 ## Plots didn't render
 
-Plot generation is best-effort — a plotting failure prints a warning but never kills the
+Plot generation is best-effort. A plotting failure prints a warning but never kills the
 run, and `summary.json` / `summary.txt` are still written. Confirm `matplotlib` is
-installed; re-render later from the run dir.
+installed, then re-render later from the run dir.
 
 ## A grade looks wrong after I changed the rubric
 
