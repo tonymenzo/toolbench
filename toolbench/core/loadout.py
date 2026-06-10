@@ -107,4 +107,13 @@ def _load_file(path: Path, name: str) -> Loadout:
             candidate = bench_dir / src.config
             if candidate.exists():
                 src.config = str(candidate.resolve())
+    # Skill `file:` paths are benchmark-relative too (e.g.
+    # `./skills/distance_recipe.md`). Resolve unconditionally — a skill
+    # that doesn't exist must fail loudly at trial setup, not be left as
+    # a cwd-dependent relative path that may or may not resolve later.
+    for skill in loadout.skills:
+        if isinstance(skill, dict) and isinstance(skill.get("file"), str):
+            p = Path(skill["file"])
+            if not p.is_absolute():
+                skill["file"] = str((bench_dir / p).resolve())
     return loadout

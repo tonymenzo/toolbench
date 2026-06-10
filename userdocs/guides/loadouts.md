@@ -110,10 +110,28 @@ tools:
 
 ## Skills
 
-A loadout may also expose **skills**, short recipe/guide documents the agent can consult.
-The `geometry` benchmark's `guided` loadout pairs the basic arithmetic tools with a
+A loadout may also expose **skills**, short recipe/guide documents delivered to the agent —
+the third leg of a domain harness (tools + skills + prompts):
+
+```yaml
+skills:
+  - name: distance_recipe
+    file: ./skills/distance_recipe.md   # benchmark-relative
+    mode: on_demand                     # or: inline
+```
+
+- **`on_demand`** (default): the file is copied into the trial sandbox at
+  `skills/<name>.md` and the system prompt gains a one-line pointer; the agent reads it
+  when it judges it relevant. Costs ~no context until consulted — but the harness core
+  needs a way to read files (`ReadFileTool` / `RunCommandTool`).
+- **`inline`**: the full content is embedded in the system prompt. Always visible, costs
+  context every turn; right for short recipes or cores without file tools.
+
+Skills are part of the measured configuration: a declared skill whose file is missing
+fails trial setup loudly, and each trial records its skill names in `trial.json`. The
+`geometry` benchmark's `guided` loadout pairs the basic arithmetic tools with a
 `distance_recipe` skill that teaches assembling a distance from primitives, so you can
-measure whether the *guidance* (rather than a dedicated tool) is enough.
+measure whether *guidance* (rather than a dedicated tool) is enough.
 
 ## The geometry loadouts
 

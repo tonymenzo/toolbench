@@ -24,18 +24,19 @@ loop:
   max_iterations: 150       # agent.run round-trip cap
   max_format_retries: 2     # resume on a malformed tool-call (serialization) crash
   continue_nudges: 0        # presence-gated resumes when a deliverable is missing (0 = strict)
-  on_tool_error: retry
-  max_retries: 2
 ```
 
-- **`runtime`** is the agent framework and a PEP 440 version constraint, checked at trial
-  setup.
+- **`runtime`** is the agent framework and a PEP 440 version constraint, enforced against
+  the installed runtime when the run starts (a failing pin aborts before any trial spends
+  tokens).
 - **`provider`** is the LLM provider plus default request params. The *model id* comes from
   `--models`, not from here.
 - **`core`** is either a `tools:` list of runtime primitives **or** `builtin: true` for a
   runtime that ships its own (e.g. `claude-code`). Exactly one of the two.
-- **`loop`** is the retry/iteration policy. These are the defaults the CLI's
-  `--max-iterations` / `--max-format-retries` / `--continue-nudges` flags override.
+- **`loop`** is the retry/iteration policy: `max_iterations`, `max_format_retries`,
+  `continue_nudges`, `max_rate_limit_retries` — the defaults the corresponding CLI flags
+  override. A `loop:` key the runner doesn't consume triggers a loud warning, so a knob
+  that governs nothing can't silently mislabel a run's conditions.
 
 ## Choosing a harness and model
 

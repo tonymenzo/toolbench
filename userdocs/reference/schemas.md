@@ -93,13 +93,11 @@ loop:
   max_format_retries: 2
   continue_nudges: 0
   max_rate_limit_retries: 3   # backoff resumes on provider 429/529
-  on_tool_error: retry
-  max_retries: 2
 ```
 
 | Key        | Notes                                                                       |
 |------------|----------------------------------------------------------------------------|
-| `runtime`  | `{name, version}`. The name must be a registered runtime (`orchestral` ships; add more via `toolbench.core.runtime.register_runtime`). |
+| `runtime`  | `{name, version}`. The name must be a registered runtime (`orchestral` ships; add more via `toolbench.core.runtime.register_runtime`), and `version` is a PEP 440 spec enforced against the installed runtime at run start. |
 | `provider` | `{name, ...request params}`, and the provider must be registered. Model ≠ here. |
 | `core`     | Exactly one of `tools: [...]` (runtime primitives) **or** `builtin: true`.  |
 | `loop`     | Loop policy. The CLI loop flags override these per run.                     |
@@ -137,7 +135,7 @@ skills: []
 | `toolbase:`    | `{profile, project_root?}`, resolved via toolbase; served toolkit versions are recorded as provenance. *(inline `toolsets:` not yet wired.)* |
 | `mcp:`         | Any MCP server: `{command: [argv...], env?}` (stdio) or `{url, headers?}` (HTTP), `timeout?` seconds. Needs `toolbench[mcp]`. |
 | `select:`      | Sibling of a source, keeping only these bundles/tools (toolbase/mcp: namespaced or unambiguous bare names). |
-| `skills:`      | Optional recipe/guide docs exposed to the agent.                    |
+| `skills:`      | `[{name, file, mode?}]` — guide docs delivered to the agent: `on_demand` (default) copies the file into the sandbox `skills/` dir with a system-prompt pointer; `inline` embeds it in the system prompt. `file:` is benchmark-relative; a missing file fails the trial setup loudly. |
 
 `${VAR}` in `mcp:` config values expands from the environment, so tokens live in `.env`,
 not in the loadout yaml — and `headers:`/`env:` values are redacted in everything the run

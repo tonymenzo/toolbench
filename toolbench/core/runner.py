@@ -38,6 +38,7 @@ from .llm_factory import StubLLM, build_llm
 from .loadout import Loadout
 from .metrics import cost_usd, per_trial_reach
 from .runtime import build_agent
+from .skills import prepare_skills, skill_names
 from .store import write_json, write_jsonl_gz
 from .task import Grade, Task
 from .tool_resolver import build_agent_tools, release_sources
@@ -146,8 +147,19 @@ class TrialRunner:
 
     def _resolve_loop(self, harness: Harness) -> dict:
         """Effective loop config = CLI/explicit override, else harness.loop,
-        else hard default."""
+        else hard default.
+
+        Any `loop:` key the runner does not consume gets a loud stderr
+        warning — a knob that's written in the harness but governs
+        nothing would otherwise mislabel the run's conditions silently.
+        """
         loop = getattr(harness, "loop", None) or {}
+        unconsumed = sorted(set(loop) - set(_LOOP_DEFAULTS))
+        if unconsumed:
+            print(f"warning: harness {harness.id!r}: loop key(s) {unconsumed} "
+                  f"are not consumed by the runner and have NO effect. "
+                  f"Consumed keys: {sorted(_LOOP_DEFAULTS)}.",
+                  file=sys.stderr)
         out = {}
         for key, override in (
             ("max_iterations", self.max_iterations),
@@ -208,6 +220,14 @@ class TrialRunner:
         judge = RuleJudge(registry=registry, benchmark_dir=benchmark_dir)
         prompt_base = variant.read_user_prompt()
         system_prompt = variant.read_system_prompt() or DEFAULT_SYSTEM_PROMPT
+        # Loadout skills: tool-use guidance that travels with the loadout.
+        # on_demand skills land in <sandbox>/skills/ with a prompt pointer;
+        # inline skills are embedded. Strict: a declared-but-missing skill
+        # raises here rather than silently running a thinner arm.
+        skills_addendum = prepare_skills(loadout.skills, sandbox_dir,
+                                         loadout_name=loadout.name)
+        if skills_addendum:
+            system_prompt = f"{system_prompt}\n\n{skills_addendum}"
 
         trajectory = Trajectory()
         traj_hook = TrajectoryHook(
@@ -467,6 +487,7 @@ class TrialRunner:
                     "loop": harness.loop,
                 },
                 "loadout": loadout.name,
+                "skills": skill_names(loadout.skills),
                 "variant": {
                     "name": variant.name,
                     "description": variant.description,

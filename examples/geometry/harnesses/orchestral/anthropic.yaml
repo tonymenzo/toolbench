@@ -11,5 +11,3 @@ loop:
   max_iterations: 150        # agent.run() round-trip cap (consumed by the runner)
   max_format_retries: 2      # resume the session on a MODEL_FORMAT_CRASH (bad tool-call JSON)
   continue_nudges: 0         # presence-gated resumes when the model stops early (0 = strict autonomy)
-  on_tool_error: retry       # orchestral-native
-  max_retries: 2             # orchestral-native
