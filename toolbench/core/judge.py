@@ -85,7 +85,20 @@ class RuleJudge(Judge):
             ))
             stages[sid] = passed
 
-        score = round(sum(s.weight for s in stage_grades if s.passed), 4)
+        # Score follows the documented absorbing (prefix-product)
+        # convention, normalized to [0,1]: a stage contributes its weight
+        # only if it AND every earlier stage passed, so `score` is exactly
+        # the per-trial reach R_j that the aggregate reach metrics build
+        # on. (A plain sum of passed weights would credit stages reached
+        # after an earlier failure and disagree with reach.)
+        total_w = sum(s.weight for s in stage_grades)
+        cum = True
+        earned = 0.0
+        for s in stage_grades:
+            cum = cum and s.passed
+            if cum:
+                earned += s.weight
+        score = round(earned / total_w, 4) if total_w > 0 else 0.0
 
         if all(s.passed for s in stage_grades):
             failure_mode = NONE

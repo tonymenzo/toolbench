@@ -16,6 +16,7 @@ from pathlib import Path
 
 import yaml
 
+from toolbench.core.artifact_policy import ArtifactPolicy
 from toolbench.core.task import Rubric, Task
 from toolbench.core.variant import Variant, discover_variants
 
@@ -36,6 +37,16 @@ class YamlBenchmark(Task):
 
         self.rubric = Rubric.from_block(self.cfg.get("rubric"))
         self.rubric.validate()
+
+        # What sandbox cleanup preserves for regrade. Defaults cover the
+        # common artifact types; a benchmark whose deliverables fall
+        # outside them must declare an `artifacts:` block (see
+        # toolbench/core/artifact_policy.py).
+        try:
+            self.artifact_policy = ArtifactPolicy.from_block(
+                self.cfg.get("artifacts"))
+        except ValueError as e:
+            raise ValueError(f"benchmark {self.name!r}: {e}") from e
 
         self._variants: dict[str, Variant] = discover_variants(self.BENCHMARK_DIR)
         if not self._variants:

@@ -19,6 +19,7 @@ structured account of what resolved (for the manifest and `--dry-run`).
 """
 
 import contextlib
+import copy
 import importlib
 import importlib.util
 import os
@@ -155,6 +156,25 @@ def resolve_python_source(source: Source, base_directory: str) -> list:
         )
     bundles = getattr(mod, "BUNDLES", {}) or {}
     tools = _apply_select(all_tools, bundles, source.select, str(module))
+    # Per-trial copies: dotted-name / package-dir sources are cached in
+    # sys.modules, so their TOOLS entries are process-wide singletons.
+    # Scoping a shared instance to this trial's sandbox would re-point
+    # every concurrent trial using the same source (--parallel) at one
+    # sandbox. (.py-file sources are re-exec'd fresh per resolution, but
+    # copying uniformly is cheap and keeps the invariant simple.)
+    copied = []
+    for t in tools:
+        try:
+            copied.append(copy.deepcopy(t))
+        except Exception:
+            # Un-copyable tool (live client handle, ...): fall back to the
+            # shared instance — correct for serial runs, racy in parallel.
+            print(f"warning: python source {module!r}: tool "
+                  f"{_tool_name(t)!r} is not deep-copyable; sharing one "
+                  "instance across trials (unsafe with --parallel > 1).",
+                  file=sys.stderr)
+            copied.append(t)
+    tools = copied
     for t in tools:
         _maybe_set_base_directory(t, base_directory)
     return tools
@@ -256,12 +276,16 @@ def build_agent_tools(harness: Harness, loadout: Loadout,
 
     def _register(tool, label: str):
         nm = _tool_name(tool)
-        if nm in seen:
+        # Case-insensitive: Orchestral lower-cases registered tool names,
+        # so `Add` and `add` would alias at call time — treat them as the
+        # same name here too (matching `select:` and judge matching).
+        key = nm.lower()
+        if key in seen:
             raise ValueError(
-                f"tool name collision: {nm!r} provided by both {seen[nm]} "
+                f"tool name collision: {nm!r} provided by both {seen[key]} "
                 f"and {label}; disable one in the loadout."
             )
-        seen[nm] = label
+        seen[key] = label
         tools.append(tool)
 
     core_tools = resolve_core_tools(harness, base_directory)

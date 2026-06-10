@@ -19,6 +19,9 @@ ground_truth:
   dir: ./ground_truth
 rubric: { type: stagewise, stages: [ ... ] }
 checks: ./checks                     # optional: benchmark-local checks module
+artifacts:                           # optional: what sandbox cleanup preserves
+  keep_full: [".pdf", ".png", ".csv", ".json"]
+  truncate: [ { ext: ".jsonl", max_records: 200 } ]
 ```
 
 | Key               | Type   | Notes                                              |
@@ -32,6 +35,25 @@ checks: ./checks                     # optional: benchmark-local checks module
 | `ground_truth.dir`| path   | Reference-answer directory.                         |
 | `rubric`          | map    | See [Rubric](#rubric).                              |
 | `checks`          | path   | Optional module exposing `CHECKS` (+ `ROLES`).     |
+| `artifacts`       | map    | See [Artifacts](#artifacts).                        |
+
+## Artifacts
+
+After grading, each trial's sandbox is deleted; only files matched by the
+`artifacts:` policy are copied into `trials/<id>/artifacts/` — and those are
+all `toolbench regrade` can ever see. **The policy must keep every file the
+rubric's checks read.** The runner audits this after every trial and warns if
+a stage that just passed would flip against the preserved artifacts.
+
+| Key                | Default                                          | Notes                                  |
+|--------------------|--------------------------------------------------|----------------------------------------|
+| `keep_full`        | `.pdf .png .npy .py .lhe .lhe.gz .json`          | Extensions copied verbatim.            |
+| `truncate`         | `[{ext: .jsonl, max_records: 200}]`              | Record-oriented files, first N records. |
+| `keep_root`        | `[todos.md]`                                     | Bare-name files at the sandbox root.   |
+| `exclude_segments` | `[bin/internal]`                                 | Path segments pruned (third-party machinery). |
+
+Each key *replaces* its default when present. Agent-authored code passed to
+code-running tools is always preserved under `artifacts/scripts/`.
 
 ## Rubric
 
@@ -76,10 +98,19 @@ loop:
 
 | Key        | Notes                                                                       |
 |------------|----------------------------------------------------------------------------|
-| `runtime`  | `{name, version}`, a PEP 440 version checked at trial setup.                |
+| `runtime`  | `{name, version}`. The name must be a registered runtime (`orchestral` ships; add more via `toolbench.core.runtime.register_runtime`). |
 | `provider` | `{name, ...request params}`, and the provider must be registered. Model ≠ here. |
 | `core`     | Exactly one of `tools: [...]` (runtime primitives) **or** `builtin: true`.  |
 | `loop`     | Loop policy. The CLI loop flags override these per run.                     |
+
+Everything in `provider:` besides `name` and `cache_bust` is forwarded as a
+request parameter on every model call (`max_tokens`, `temperature`, ...).
+`cache_bust: true` appends a per-trial nonce to the prompt — needed only for
+routes with *response-level* caching (e.g. a LiteLLM proxy with caching
+enabled), where identical requests can return identical completions and the
+k trials of a cell would stop being independent samples. Direct providers'
+prompt/KV caches don't affect sampling, so the default is off and the model
+sees the variant's prompt verbatim.
 
 The id is the path under `harnesses/` minus `.yaml` (e.g. `orchestral/anthropic`).
 

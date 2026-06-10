@@ -45,6 +45,21 @@ you want a clean delta (see [Reading results & scores](reading-results.md)).
 | `--n`                             | Trials (seeds) per cell. Default 3.                            |
 | `--seed-base`                     | Base seed. Trial seeds are `seed_base + i`. Default 1001.      |
 | `--max-cost-usd`                  | Hard budget cap. The run aborts when spend would exceed it. Required. |
+| `--parallel`                      | Trials in flight at once. Default 1 (serial).                  |
+
+Trials are scheduled *seed-major*: every cell runs its first trial before any cell runs
+its second. If the budget aborts the run mid-grid, every condition has (nearly) the same
+number of completed trials — k degrades uniformly instead of later cells being dropped
+wholesale.
+
+## Parallel trials
+
+`--parallel N` keeps N trials in flight at once. Each trial is fully self-contained (its
+own sandbox, agent, LLM client, console.log, and toolbase subprocesses), so trials don't
+interact; the practical limits are provider rate limits and the budget check, which
+happens as each trial *finishes* — so up to N in-flight trials can complete (and bill)
+after the cap is crossed. With `--verbose`, per-tool-call lines from concurrent trials
+interleave on stdout; the per-trial `console.log`s stay clean.
 
 ## Dry runs (validate for \$0)
 
@@ -65,11 +80,16 @@ It is the fastest way to catch a broken loadout or a misspelled tool before a re
 The retry/loop knobs default to each harness's `loop:` block. Pass a flag to override for
 this run:
 
-| Flag                    | Overrides                                                              |
-|-------------------------|-----------------------------------------------------------------------|
-| `--max-iterations`      | `loop.max_iterations`, the agent's tool-call round-trip cap.          |
-| `--max-format-retries`  | `loop.max_format_retries`, resumes on a malformed-tool-call crash.   |
-| `--continue-nudges`     | `loop.continue_nudges`, presence-gated "you're not done" resumes.    |
+| Flag                       | Overrides                                                              |
+|----------------------------|-----------------------------------------------------------------------|
+| `--max-iterations`         | `loop.max_iterations`, the agent's tool-call round-trip cap.          |
+| `--max-format-retries`     | `loop.max_format_retries`, resumes on a malformed-tool-call crash.   |
+| `--continue-nudges`        | `loop.continue_nudges`, presence-gated "you're not done" resumes.    |
+| `--max-rate-limit-retries` | `loop.max_rate_limit_retries`, backoff resumes on provider throttling (429/529). Default 3. |
+
+Rate-limit retries exist so provider throttling — likely under `--parallel` — is
+recorded as the operational event it is (`rate_limit_retries` on the trial row, or
+`RATE_LIMITED` when exhausted) instead of contaminating the results as a model failure.
 
 `--continue-nudges` only ever fires when a *required deliverable is still absent*. It
 never consults a correctness check, so a finished-but-wrong trial is left alone and the

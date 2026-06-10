@@ -4,7 +4,7 @@ mode + a human-readable reason.
 
 The `RuleJudge` records the failure mode in the rubric grade. Distinct
 modes give us first-class signal in the failure-mode taxonomy (see
-`eval/reporting/plot_overview.py`); a clean reason string keeps the
+`toolbench/reporting/plot_overview.py`); a clean reason string keeps the
 trial footer / summary readable instead of dumping a Python traceback.
 
 Currently classified:
@@ -13,8 +13,7 @@ Currently classified:
   OpenAI tool-call parser. gpt-oss (and similar function-calling
   models) periodically emit malformed JSON in their tool-call
   arguments — empty strings, truncated objects, leaked Harmony
-  channel markers. Frequency scales with context length. See
-  `eval/docs/model_notes.md`.
+  channel markers. Frequency scales with context length.
 - `CONTEXT_LENGTH_EXCEEDED`: the conversation outgrew the model's
   context window and the provider rejected the request (HTTP 400 /
   `context_length_exceeded`). Long, tool-heavy trials hit this — the
@@ -30,7 +29,7 @@ import json
 import re
 
 from .failure_modes import (
-    AGENT_CRASH, CONTEXT_LENGTH_EXCEEDED, MODEL_FORMAT_CRASH,
+    AGENT_CRASH, CONTEXT_LENGTH_EXCEEDED, MODEL_FORMAT_CRASH, RATE_LIMITED,
 )
 
 
@@ -48,6 +47,22 @@ _CONTEXT_MARKERS = (
     "exceeds model's maximum",
     "reduce the length of the messages",
 )
+
+# Markers for provider throttling / load-shedding, matched lowercase.
+# Anthropic: 429 `rate_limit_error`, 529 `overloaded_error` (both raised
+# as RateLimitError / APIStatusError); OpenAI: 429 `rate_limit_exceeded`
+# / `insufficient_quota`; proxies tend to pass the upstream text through.
+_RATE_LIMIT_MARKERS = (
+    "rate limit",
+    "rate_limit",
+    "ratelimit",
+    "overloaded_error",
+    "too many requests",
+    "insufficient_quota",
+)
+# Bare status codes, matched as standalone tokens to avoid firing on an
+# unrelated number inside a traceback.
+_RATE_LIMIT_STATUS_RE = re.compile(r"\b(?:429|529)\b")
 
 
 def classify_crash(exc: BaseException, traceback_str: str) -> tuple[str, str]:
@@ -67,10 +82,35 @@ def classify_crash(exc: BaseException, traceback_str: str) -> tuple[str, str]:
     if _is_tool_call_json_decode_error(exc, traceback_str):
         return MODEL_FORMAT_CRASH, _format_tool_call_decode_reason(exc)
 
+    if _is_rate_limit_error(exc, traceback_str):
+        return RATE_LIMITED, _rate_limit_reason(exc)
+
     if _is_context_length_error(exc, traceback_str):
         return CONTEXT_LENGTH_EXCEEDED, _context_length_reason(exc, traceback_str)
 
     return AGENT_CRASH, _short_reason(exc, traceback_str)
+
+
+def _is_rate_limit_error(exc: BaseException, traceback_str: str) -> bool:
+    """True if the provider throttled (429) or shed load (529/overloaded).
+
+    Matched on the exception type name (`RateLimitError` across the
+    OpenAI and Anthropic SDKs) plus provider-agnostic message markers,
+    so proxied backends classify too.
+    """
+    if "ratelimit" in type(exc).__name__.lower():
+        return True
+    blob = f"{exc} {traceback_str}".lower()
+    if any(marker in blob for marker in _RATE_LIMIT_MARKERS):
+        return True
+    return bool(_RATE_LIMIT_STATUS_RE.search(str(exc)))
+
+
+def _rate_limit_reason(exc: BaseException) -> str:
+    head = f"{type(exc).__name__}: {exc}".replace("\n", " ").strip()
+    if len(head) > 160:
+        head = head[:159] + "…"
+    return f"provider throttled the request: {head}"
 
 
 def _is_context_length_error(exc: BaseException, traceback_str: str) -> bool:

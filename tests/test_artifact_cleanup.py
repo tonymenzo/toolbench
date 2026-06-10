@@ -1,4 +1,4 @@
-"""Sandbox-cleanup keep-list behavior (eval/core/runner.py).
+"""Sandbox-cleanup keep-list behavior (toolbench/core/runner.py).
 
 Pins two properties that are easy to regress:
   * agent-authored code executed via code-running tools (RunPythonTool)

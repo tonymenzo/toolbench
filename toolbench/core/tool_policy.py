@@ -4,7 +4,7 @@ Core (primitive) tool factory.
 `_build_core_tool` instantiates an Orchestral primitive tool by class name
 (`RunCommandTool`, `WriteFileTool`, ...), scoped to a trial's sandbox
 `base_directory`. A harness's `core: {tools: [...]}` block names which
-primitives it supplies; the resolver (eval/core/tool_resolver.py) calls
+primitives it supplies; the resolver (toolbench/core/tool_resolver.py) calls
 this factory for each. These are framework-level primitives, distinct from
 the benchmark-specific tools a loadout brings in via its sources.
 """

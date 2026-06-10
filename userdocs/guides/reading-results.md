@@ -80,6 +80,13 @@ value of the domain tools* for this task, on this model. Swap which axis you lis
 `--loadouts` / `--models` / `--variants` / `--harnesses` and the delta means something
 different. See the table in [Metrics](../reference/metrics.md#what-a-sweep-tells-you).
 
+For the delta itself, read the **CONDITION DELTAS** section (`paired_deltas` in
+`summary.json`) rather than differencing two cells by hand. Conditions share seeds, so
+toolbench pairs trials per seed and bootstraps over the *seed dimension* — per-seed noise
+cancels in the difference, giving a tighter (and honest) CI than combining two per-cell
+CIs. Direction is `condition_b − condition_a` in the order you listed the conditions; a
+CI that excludes 0 is a delta your n actually supports.
+
 ## Where trials die
 
 `per_stage_k.png` (and the `stages` block in `summary.json`) show the per-stage pass rate.

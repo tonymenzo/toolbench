@@ -49,6 +49,12 @@ def render_run_summary(summary: dict, manifest: dict | None = None,
         out.append("")
         out.extend(_render_cell(cell))
 
+    deltas = summary.get("paired_deltas") or []
+    if deltas:
+        out.append("")
+        out.append("")
+        out.extend(_render_paired_deltas(deltas))
+
     if run_dir is not None:
         out.append("")
         out.append("")
@@ -164,6 +170,37 @@ def _render_cost(cell: dict) -> list[str]:
         f"      wall      {fmt_wall(total_wall)} total      "
         f"{fmt_wall(mean_wall)} / trial",
     ]
+
+
+def _render_paired_deltas(deltas: list[dict]) -> list[str]:
+    """One line per (model × condition-pair): the headline ablation numbers.
+
+    Paired over shared seeds, so the CI is the right uncertainty for the
+    delta itself (per-seed noise cancels). Direction is b − a in CLI
+    condition order.
+    """
+    out = [
+        *_banner("CONDITION DELTAS  (paired by seed)"),
+        "",
+        "      Δ = condition_b − condition_a, averaged over shared seeds;",
+        "      CI95 is a paired bootstrap over the seed dimension.",
+        "",
+    ]
+    for d in deltas:
+        pair = f"{d['condition_b']} − {d['condition_a']}"
+        ci = d.get("reach_delta_ci95")
+        ci_txt = (f"  CI95 [{ci[0]:+.2f}, {ci[1]:+.2f}]" if ci
+                  else "  (n<2: no CI)")
+        out.append(f"  {d['model']}:  {pair}")
+        out.append(f"      Δreach    {d['reach_delta']:+.2f}{ci_txt}"
+                   f"      (n_pairs={d['n_pairs']})")
+        pci = d.get("pass_delta_ci95")
+        pci_txt = (f"  CI95 [{pci[0]:+.2f}, {pci[1]:+.2f}]" if pci else "")
+        out.append(f"      Δpass     {d['pass_delta']:+.2f}{pci_txt}")
+        out.append("")
+    if out[-1] == "":
+        out.pop()
+    return out
 
 
 def _render_artifacts(run_dir: Path) -> list[str]:

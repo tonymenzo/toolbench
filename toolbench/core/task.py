@@ -25,6 +25,8 @@ class StageGrade:
 
 @dataclass
 class Grade:
+    # `score` ∈ [0,1]: rubric-weighted reach under the absorbing
+    # convention (normalized prefix product) — see RuleJudge.grade.
     score: float
     stages: dict[str, bool]
     stage_grades: list[StageGrade]

@@ -69,6 +69,11 @@ class Trajectory:
     tokens: dict = field(default_factory=lambda: {"input": 0, "output": 0,
                                                   "cache_read": 0, "cache_creation": 0})
     cost_usd: float | None = None
+    # The model id the provider actually served (usage.model_name — for
+    # aliases like `claude-haiku-4-5` this is the dated snapshot). An
+    # alias can re-route between snapshots mid-campaign, so the trial
+    # record keeps proof of exactly what model produced it.
+    resolved_model: str | None = None
 
     def to_metadata_dict(self) -> dict:
         """Compact summary for trial.json — the full tool-call list
@@ -79,6 +84,7 @@ class Trajectory:
             "final_response": self.final_response,
             "tokens": self.tokens,
             "cost_usd": self.cost_usd,
+            "resolved_model": self.resolved_model,
         }
 
 
