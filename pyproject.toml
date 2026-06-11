@@ -38,7 +38,7 @@ dependencies = [
 [project.optional-dependencies]
 # Closes the loop: resolve `toolbase:` loadout sources via toolbase's
 # in-process orchestral integration. Optional — `python:` sources work without it.
-toolbase = ["toolbase>=0.1.0"]
+toolbase = ["toolbase>=0.3.0"]   # >=0.3.0: per-serve config_overrides (sandbox scoping)
 # Serve any MCP server (stdio or HTTP) as a loadout source via
 # orchestral's MCPClient. Optional — python:/toolbase: sources work without it.
 mcp = ["mcp>=1.0"]
