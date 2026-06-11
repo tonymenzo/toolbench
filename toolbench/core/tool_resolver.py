@@ -29,6 +29,7 @@ import contextlib
 import copy
 import importlib
 import importlib.util
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -262,10 +263,26 @@ def resolve_toolbase_source(source: Source, base_directory: str) -> list:
             f"Offending source: {source.config!r}"
         )
 
+    # Scope the served tools to the trial sandbox. toolbase hosts run in
+    # their own subprocesses with their own config-resolved
+    # base_directory (default: the serve cwd) — without this override,
+    # an agent's file-aware toolkit tools read/write a DIFFERENT tree
+    # than its harness-core tools, and every sandbox-relative path the
+    # agent passes fails. toolbase >= the config_overrides feature
+    # accepts the kwarg; older versions get a loud warning because the
+    # mismatch corrupts trials silently.
+    tb_kwargs: dict = {"profile": profile, "project_root": project_root,
+                       "quiet": True}
+    if "config_overrides" in inspect.signature(toolbase_tools).parameters:
+        tb_kwargs["config_overrides"] = {"base_directory": base_directory}
+    else:
+        print("warning: installed toolbase predates config_overrides — "
+              "toolbase-served tools will NOT be scoped to the trial "
+              "sandbox (file-path tool calls will misresolve). Upgrade "
+              "toolbase.", file=sys.stderr)
+
     stack = _source_stack(base_directory)
-    tools = list(stack.enter_context(
-        toolbase_tools(profile=profile, project_root=project_root, quiet=True)
-    ))
+    tools = list(stack.enter_context(toolbase_tools(**tb_kwargs)))
     # The profile curates what toolbase serves; a loadout-level `select:`
     # carves an ablation arm out of that served set without authoring one
     # profile per arm. Items match the namespaced name (`toolkit__tool`)
