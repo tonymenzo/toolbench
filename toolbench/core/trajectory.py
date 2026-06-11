@@ -81,6 +81,7 @@ class Trajectory:
         """
         return {
             "n_tool_calls": len(self.tool_calls),
+            "n_tool_errors": sum(1 for tc in self.tool_calls if not tc.ok),
             "final_response": self.final_response,
             "tokens": self.tokens,
             "cost_usd": self.cost_usd,
@@ -101,6 +102,14 @@ def _classify_ok(result) -> bool:
             return False
         if "error" in result and result.get("error"):
             return False
+    # Orchestral's tool contract returns errors as strings: tool
+    # exceptions become "Error: Execution Error\n- Reason: ...", and
+    # format_error() produces "Error: <kind>\n- Reason: ...". Without
+    # this, every failed orchestral tool call renders as a clean
+    # success in the transcript and console.log — 23 consecutive
+    # path-resolution failures looked like a healthy trial.
+    if isinstance(result, str) and result.lstrip().startswith("Error:"):
+        return False
     return True
 
 
@@ -122,6 +131,20 @@ def _extract_error_msg(result) -> str:
                         msg = msg[:_ERROR_TRUNCATE - 1] + "…"
                     return msg
     text = str(result).strip()
+    # Orchestral error strings: "Error: <kind>" headline plus a
+    # "- Reason: <detail>" line. Lead with the reason — it's the
+    # actionable part ("run card does not exist") and the console line
+    # is width-truncated, so a leading generic headline ("Error:
+    # Execution Error - Reason: …") would push it off the edge.
+    if text.startswith("Error:"):
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        kind = lines[0][len("Error:"):].strip()
+        reason = next((ln[len("- Reason:"):].strip() for ln in lines
+                       if ln.startswith("- Reason:")), "")
+        msg = f"{kind}: {reason}" if reason else (kind or lines[0])
+        if len(msg) > _ERROR_TRUNCATE:
+            msg = msg[:_ERROR_TRUNCATE - 1] + "…"
+        return msg
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
         return text[:_ERROR_TRUNCATE]

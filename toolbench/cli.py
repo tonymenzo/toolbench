@@ -859,6 +859,8 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
             "cache_read_tokens": result.trajectory.tokens.get("cache_read", 0),
             "cost_usd": round(result.cost_usd, 6) if result.cost_usd is not None else None,
             "tool_calls": len(result.trajectory.tool_calls),
+            "tool_errors": sum(1 for tc in result.trajectory.tool_calls
+                               if not tc.ok),
             "resolved_model": result.trajectory.resolved_model,
             "failure_mode": result.grade.failure_mode,
             "attempts": result.attempts,
