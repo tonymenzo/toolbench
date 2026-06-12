@@ -35,9 +35,11 @@ class RuleJudge(Judge):
     kind = "rule"
 
     def __init__(self, registry: dict | None = None,
-                 benchmark_dir: str | None = None):
+                 benchmark_dir: str | Path | list[Path] | None = None):
         # `registry` merges built-in + benchmark-local checks; `benchmark_dir`
-        # anchors relative `reference:` paths. Both default to the built-ins.
+        # anchors relative `reference:` paths (one dir, or a benchmark's
+        # `search_dirs` when it extends another). Both default to the
+        # built-ins.
         self.registry = registry if registry is not None else BUILTIN_CHECKS
         self.benchmark_dir = benchmark_dir
 

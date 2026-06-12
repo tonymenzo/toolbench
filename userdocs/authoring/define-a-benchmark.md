@@ -57,6 +57,14 @@ rubric:
 | `ground_truth.dir`   | Directory of reference files for correctness checks.                 |
 | `rubric`             | The grading spec. See [Rubrics & checks](rubrics-and-checks.md).     |
 | `checks`             | *(optional)* path to a benchmark-local `checks.py` (custom checks).  |
+| `extends`            | *(optional)* parent benchmark dir to inherit from. See [Extends](../reference/schemas.md#extends). |
+
+When sibling benchmarks share one underlying task but grade different
+deliverables (a shape-only rubric, a stricter tolerance), don't duplicate the
+directory — write a small overlay with `extends:` that restates only the
+rubric (and prompts, if the ask changes) and inherits the rest. A different
+rubric is a different benchmark, not a variant: variants hold the rubric
+fixed so cross-variant deltas stay comparable.
 
 ## Ground truth
 

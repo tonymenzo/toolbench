@@ -309,7 +309,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     bench_dir = benchmark.BENCHMARK_DIR
 
     # Harness(es) — default from benchmark.yaml's default_harness.
-    all_h = discover_harnesses(bench_dir)
+    # Discovery walks the benchmark's search dirs, so an `extends:`
+    # overlay sees the parent's harnesses/loadouts and shadows by name.
+    all_h = discover_harnesses(benchmark.search_dirs)
     h_ids = _split(args.harnesses) or (
         [benchmark.default_harness] if getattr(benchmark, "default_harness", None) else [])
     if not h_ids:
@@ -322,7 +324,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     harnesses = [all_h[h] for h in h_ids]
 
     # Loadout(s) — default from benchmark.yaml's default_loadout.
-    all_l = discover_loadouts(bench_dir)
+    all_l = discover_loadouts(benchmark.search_dirs)
     l_names = _split(args.loadouts) or (
         [benchmark.default_loadout] if getattr(benchmark, "default_loadout", None) else [])
     if not l_names:
@@ -404,6 +406,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         "git_sha": _git_sha(),
         "benchmark": bench_name,
         "benchmark_dir": str(bench_dir),
+        # `extends:` provenance: the parent dir and the post-merge config
+        # (absolute ground-truth/checks paths), so the run records what
+        # the parent said at run time rather than a pointer that may drift.
+        "benchmark_extends": (str(benchmark.extends_dir)
+                              if benchmark.extends_dir else None),
+        "benchmark_config": benchmark.resolved_config(),
         "harnesses": [{"id": h.id, "runtime": h.runtime, "provider": h.provider,
                        "core": h.core, "loop": h.loop} for h in harnesses],
         "loadouts": l_names,
@@ -520,13 +528,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
     benchmark = _load_benchmark(manifest.get("benchmark_dir"))
     if benchmark is None:
         return 2
-    bench_dir = benchmark.BENCHMARK_DIR
-
-    all_h = discover_harnesses(bench_dir)
+    all_h = discover_harnesses(benchmark.search_dirs)
     h_ids = [h["id"] if isinstance(h, dict) else h
              for h in manifest.get("harnesses", [])]
     harnesses = [all_h[i] for i in h_ids if i in all_h]
-    all_l = discover_loadouts(bench_dir)
+    all_l = discover_loadouts(benchmark.search_dirs)
     l_names = manifest.get("loadouts") or manifest.get("conditions", [])
     loadouts = [all_l[n] for n in l_names if n in all_l]
     all_v = benchmark.variants
@@ -640,7 +646,8 @@ def cmd_regrade(args: argparse.Namespace) -> int:
     checks_path = getattr(benchmark, "checks_module_path", lambda: None)()
     judge = RuleJudge(
         registry=merged_registry(load_benchmark_checks(checks_path)),
-        benchmark_dir=str(getattr(benchmark, "BENCHMARK_DIR", "")),
+        benchmark_dir=(getattr(benchmark, "search_dirs", None)
+                       or str(getattr(benchmark, "BENCHMARK_DIR", ""))),
     )
 
     stage_order = [s["id"] for s in benchmark.rubric.stages]

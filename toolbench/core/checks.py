@@ -136,7 +136,7 @@ def merged_roles(benchmark_roles: dict | None) -> dict:
 
 def missing_presence(rubric, sandbox: str | Path, *, registry: dict | None = None,
                      roles: dict | None = None,
-                     benchmark_dir: str | Path | None = None) -> str:
+                     benchmark_dir: str | Path | list[Path] | None = None) -> str:
     """Describe required deliverables that are ABSENT — i.e. the rubric's
     `presence`-role checks that currently fail — or '' if every deliverable is
     present.
@@ -165,11 +165,16 @@ def missing_presence(rubric, sandbox: str | Path, *, registry: dict | None = Non
 
 
 def run_check(name: str, sandbox: str | Path, params: dict | None, *,
-              benchmark_dir: str | Path | None = None,
+              benchmark_dir: str | Path | list[Path] | None = None,
               registry: dict | None = None) -> tuple[bool, str]:
     """Dispatch a single check by name. `params` is the check's config
     (everything under its key in the rubric stage). A relative
-    `reference:` param is resolved against `benchmark_dir`.
+    `reference:` param is resolved against `benchmark_dir` — one dir, or
+    a search path of dirs (a benchmark's `search_dirs`, child first when
+    it extends another): the first dir where the reference exists wins,
+    so an inherited rubric finds the parent's ground truth and a child
+    override shadows it. With no hit, the first dir is used so the
+    check's missing-file message names the benchmark's own path.
     """
     registry = registry if registry is not None else BUILTIN_CHECKS
     fn = registry.get(name)
@@ -178,7 +183,11 @@ def run_check(name: str, sandbox: str | Path, params: dict | None, *,
     p = dict(params or {})
     ref = p.get("reference")
     if ref and benchmark_dir and not os.path.isabs(str(ref)):
-        p["reference"] = str(Path(benchmark_dir) / ref)
+        dirs = ([Path(benchmark_dir)]
+                if isinstance(benchmark_dir, (str, Path))
+                else [Path(d) for d in benchmark_dir])
+        chosen = next((d for d in dirs if (d / str(ref)).exists()), dirs[0])
+        p["reference"] = str(chosen / str(ref))
     try:
         return fn(Path(sandbox), p)
     except Exception as e:  # never let a check crash the judge
