@@ -212,11 +212,13 @@ class TrialRunner:
         tools, tool_report = build_agent_tools(harness, loadout, str(sandbox_dir))
 
         # Benchmark-aware judge: built-in checks + the benchmark's local
-        # checks module, with `reference:` paths anchored at the benchmark dir.
+        # checks module, with `reference:` paths anchored at the benchmark's
+        # search dirs (its own dir, plus the parent's when it extends one).
         checks_path = getattr(benchmark, "checks_module_path", lambda: None)()
         registry = merged_registry(load_benchmark_checks(checks_path))
         roles = merged_roles(load_benchmark_roles(checks_path))
-        benchmark_dir = str(getattr(benchmark, "BENCHMARK_DIR", ""))
+        benchmark_dir = (getattr(benchmark, "search_dirs", None)
+                         or str(getattr(benchmark, "BENCHMARK_DIR", "")))
         judge = RuleJudge(registry=registry, benchmark_dir=benchmark_dir)
         prompt_base = variant.read_user_prompt()
         system_prompt = variant.read_system_prompt() or DEFAULT_SYSTEM_PROMPT

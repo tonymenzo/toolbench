@@ -36,6 +36,43 @@ artifacts:                           # optional: what sandbox cleanup preserves
 | `rubric`          | map    | See [Rubric](#rubric).                              |
 | `checks`          | path   | Optional module exposing `CHECKS` (+ `ROLES`).     |
 | `artifacts`       | map    | See [Artifacts](#artifacts).                        |
+| `extends`         | path   | Optional parent benchmark dir to inherit from. See [Extends](#extends). |
+
+## Extends
+
+A benchmark may overlay another with `extends: <path-to-parent-dir>`,
+inheriting every asset it doesn't declare. Use it when sibling benchmarks
+share one underlying task but grade different deliverables — a shape-only
+or yield-only rubric over the same simulation, a stricter tolerance ladder
+— without duplicating the directory tree.
+
+```yaml
+# sus-16-046_T5Wg_shape/benchmark.yaml — a complete overlay
+name: sus-16-046_T5Wg_shape
+description: Shape-only grading; normalization ungraded.
+extends: ../sus-16-046_T5Wg
+rubric: { type: stagewise, stages: [ ... ] }
+```
+
+Semantics:
+
+- The child is a **distinct benchmark** — own name, version, and run
+  cells. Variants stay the scaffolding axis *within* each benchmark, so
+  cross-variant reach deltas never cross a rubric boundary.
+- Top-level keys merge whole: a key the child declares replaces the
+  parent's; one it omits is inherited (`rubric`, `ground_truth`, `checks`,
+  `artifacts`, `default_*`). Identity keys (`name`, `version`,
+  `description`) are never inherited.
+- Discovery-based assets (`harnesses/`, `loadouts/`, `variants/`) are the
+  union of both dirs, child shadowing by name. Inherited paths keep
+  anchoring at the file that declared them: an inherited rubric's
+  `reference:` finds the parent's `ground_truth/`, an inherited loadout's
+  `python:` source still points at the parent's `tools/`.
+- Inheritance is **depth-1**: a parent must be self-contained; extending
+  an overlay is an error.
+- The run manifest records `benchmark_extends` and the post-merge config
+  (`benchmark_config`), so an overlay run is reproducible even if the
+  parent later changes.
 
 ## Artifacts
 

@@ -74,24 +74,45 @@ def loadouts_dir(benchmark_dir: str | Path) -> Path:
     return Path(benchmark_dir) / "loadouts"
 
 
-def discover_loadouts(benchmark_dir: str | Path) -> dict[str, Loadout]:
-    root = loadouts_dir(benchmark_dir)
+def _search_dirs(benchmark_dir) -> list[Path]:
+    """Normalize a single benchmark dir or a search path (a benchmark's
+    `search_dirs`, child first when it extends another) to a dir list."""
+    if isinstance(benchmark_dir, (str, Path)):
+        return [Path(benchmark_dir)]
+    return [Path(d) for d in benchmark_dir]
+
+
+def discover_loadouts(benchmark_dir) -> dict[str, Loadout]:
+    """Map name -> Loadout for every `loadouts/<name>.yaml`.
+
+    `benchmark_dir` is one dir or a search path of dirs; a name found in
+    an earlier dir shadows the same name in a later one (extends
+    semantics). Each file's relative paths anchor at its own benchmark
+    dir, so an inherited loadout keeps pointing at the parent's tools.
+    """
     out: dict[str, Loadout] = {}
-    if not root.is_dir():
-        return out
-    for path in sorted(root.glob("*.yaml")):
-        out[path.stem] = _load_file(path, path.stem)
+    for d in _search_dirs(benchmark_dir):
+        root = loadouts_dir(d)
+        if not root.is_dir():
+            continue
+        for path in sorted(root.glob("*.yaml")):
+            if path.stem not in out:
+                out[path.stem] = _load_file(path, path.stem)
     return out
 
 
-def load_loadout(benchmark_dir: str | Path, name: str) -> Loadout:
-    path = loadouts_dir(benchmark_dir) / (name + ".yaml")
-    if not path.is_file():
-        avail = sorted(discover_loadouts(benchmark_dir))
-        raise FileNotFoundError(
-            f"no loadout {name!r} (looked for {path}). Available: {avail}"
-        )
-    return _load_file(path, name)
+def load_loadout(benchmark_dir, name: str) -> Loadout:
+    looked = []
+    for d in _search_dirs(benchmark_dir):
+        path = loadouts_dir(d) / (name + ".yaml")
+        if path.is_file():
+            return _load_file(path, name)
+        looked.append(str(path))
+    avail = sorted(discover_loadouts(benchmark_dir))
+    raise FileNotFoundError(
+        f"no loadout {name!r} (looked for {', '.join(looked)}). "
+        f"Available: {avail}"
+    )
 
 
 def _load_file(path: Path, name: str) -> Loadout:

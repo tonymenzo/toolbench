@@ -33,6 +33,11 @@ examples/<name>/
 └── checks/checks.py        # optional: benchmark-local rubric checks
 ```
 
+A sibling benchmark that re-grades the same task can be a one-file overlay —
+`benchmark.yaml` with `extends: ../<parent>` plus whatever it overrides —
+inheriting everything else from the parent directory
+([Extends](schemas.md#extends)).
+
 See [Schemas](schemas.md) for each file's fields.
 
 ## A run directory

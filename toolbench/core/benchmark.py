@@ -10,8 +10,20 @@ own `variant.yaml` + `prompts/` + (optional) `sandbox/template/`.
 prompts and sandbox come from the chosen `Variant`. Rubric, ground truth,
 and benchmark-local checks are family-level invariants (constant across
 variants) so cross-variant reach deltas remain comparable.
+
+A benchmark may declare `extends: <path-to-sibling-benchmark-dir>` to
+inherit another benchmark's assets. The child is a *distinct* benchmark
+(own name, own version, own run cells) that overrides whole top-level
+keys — typically the rubric and prompts — while inheriting everything it
+doesn't declare: ground truth, checks, harnesses, loadouts, variants,
+defaults. This is how a family of sibling benchmarks shares one set of
+assets without duplicating directories (e.g. a shape-only or yield-only
+grading of the same underlying task). Inheritance is depth-1 by design:
+a parent must be self-contained, so overlay chains can't accumulate.
+Identity keys (`name`, `version`, `description`) are never inherited.
 """
 
+import copy
 from pathlib import Path
 
 import yaml
@@ -20,14 +32,52 @@ from toolbench.core.artifact_policy import ArtifactPolicy
 from toolbench.core.task import Rubric, Task
 from toolbench.core.variant import Variant, discover_variants
 
+# Keys that identify a benchmark rather than configure it — a child
+# overlay never inherits these from its parent.
+_IDENTITY_KEYS = ("name", "version", "description", "extends")
+
+
+def _load_layer(bench_dir: Path) -> dict:
+    """Load one benchmark.yaml and anchor its declared paths.
+
+    `ground_truth.dir` and `checks` are resolved to absolute paths here,
+    against the directory that declared them, so that after an `extends`
+    merge each path still points where its own yaml said — an inherited
+    ground truth must not silently re-anchor at the child.
+    """
+    with open(bench_dir / "benchmark.yaml") as f:
+        cfg = yaml.safe_load(f) or {}
+    gt = cfg.get("ground_truth")
+    if isinstance(gt, dict) and gt.get("dir"):
+        cfg["ground_truth"] = {**gt, "dir": str((bench_dir / gt["dir"]).resolve())}
+    if cfg.get("checks"):
+        cfg["checks"] = str((bench_dir / cfg["checks"]).resolve())
+    return cfg
+
 
 class YamlBenchmark(Task):
     """A `Task` family materialized from a `benchmark.yaml`."""
 
     def __init__(self, benchmark_dir: str | Path):
         self.BENCHMARK_DIR = Path(benchmark_dir).resolve()
-        with open(self.BENCHMARK_DIR / "benchmark.yaml") as f:
-            self.cfg = yaml.safe_load(f) or {}
+        child_cfg = _load_layer(self.BENCHMARK_DIR)
+
+        self.extends_dir: Path | None = None
+        if child_cfg.get("extends"):
+            self.extends_dir = self._resolve_parent(child_cfg["extends"])
+            parent_cfg = _load_layer(self.extends_dir)
+            if parent_cfg.get("extends"):
+                raise ValueError(
+                    f"benchmark at {self.BENCHMARK_DIR} extends "
+                    f"{self.extends_dir}, which itself extends "
+                    f"{parent_cfg['extends']!r}. Inheritance is depth-1: "
+                    "a parent benchmark must be self-contained."
+                )
+            inherited = {k: v for k, v in parent_cfg.items()
+                         if k not in _IDENTITY_KEYS}
+            self.cfg = {**inherited, **child_cfg}
+        else:
+            self.cfg = child_cfg
 
         self.name = self.cfg.get("name") or self.BENCHMARK_DIR.name
         self.version = self.cfg.get("version", "")
@@ -48,7 +98,13 @@ class YamlBenchmark(Task):
         except ValueError as e:
             raise ValueError(f"benchmark {self.name!r}: {e}") from e
 
-        self._variants: dict[str, Variant] = discover_variants(self.BENCHMARK_DIR)
+        # Variants: union of parent and child, child shadowing by name —
+        # an overlay usually ships its own prompts (the ask is what
+        # changed) but may inherit rungs it doesn't restate.
+        self._variants: dict[str, Variant] = {}
+        if self.extends_dir is not None:
+            self._variants.update(discover_variants(self.extends_dir))
+        self._variants.update(discover_variants(self.BENCHMARK_DIR))
         if not self._variants:
             raise ValueError(
                 f"benchmark {self.name!r}: no variants discovered under "
@@ -66,7 +122,41 @@ class YamlBenchmark(Task):
                 f"{sorted(self._variants)}."
             )
 
+    def _resolve_parent(self, extends: str) -> Path:
+        """Validate and resolve the `extends:` target directory."""
+        parent = (self.BENCHMARK_DIR / extends).resolve()
+        if parent == self.BENCHMARK_DIR:
+            raise ValueError(
+                f"benchmark at {self.BENCHMARK_DIR}: `extends` points at "
+                "itself."
+            )
+        if not (parent / "benchmark.yaml").is_file():
+            raise FileNotFoundError(
+                f"benchmark at {self.BENCHMARK_DIR}: `extends: {extends}` "
+                f"resolves to {parent}, which holds no benchmark.yaml."
+            )
+        return parent
+
     # --- path accessors -------------------------------------------------
+    @property
+    def search_dirs(self) -> list[Path]:
+        """Directories searched for discovery-based assets (harnesses,
+        loadouts, rubric `reference:` paths): the benchmark's own dir
+        first, then the extended parent's, so the child shadows."""
+        dirs = [self.BENCHMARK_DIR]
+        if self.extends_dir is not None:
+            dirs.append(self.extends_dir)
+        return dirs
+
+    def resolved_config(self) -> dict:
+        """The post-merge config, with `ground_truth.dir` and `checks`
+        absolute — the manifest embeds this so a run of an overlay
+        benchmark records what the parent said at run time, not just a
+        pointer that may drift."""
+        out = copy.deepcopy(self.cfg)
+        out["extends"] = str(self.extends_dir) if self.extends_dir else None
+        return out
+
     def _resolve(self, rel: str | None) -> Path | None:
         return (self.BENCHMARK_DIR / rel).resolve() if rel else None
 

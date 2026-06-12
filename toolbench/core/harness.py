@@ -75,32 +75,48 @@ def harnesses_dir(benchmark_dir: str | Path) -> Path:
     return Path(benchmark_dir) / "harnesses"
 
 
-def discover_harnesses(benchmark_dir: str | Path) -> dict[str, Harness]:
+def _search_dirs(benchmark_dir) -> list[Path]:
+    """Normalize a single benchmark dir or a search path (a benchmark's
+    `search_dirs`, child first when it extends another) to a dir list."""
+    if isinstance(benchmark_dir, (str, Path)):
+        return [Path(benchmark_dir)]
+    return [Path(d) for d in benchmark_dir]
+
+
+def discover_harnesses(benchmark_dir) -> dict[str, Harness]:
     """Map harness-id -> Harness for every yaml under `harnesses/`.
 
     The id is the path relative to `harnesses/` with `.yaml` removed,
     forward-slashed: `harnesses/orchestral/anthropic.yaml` ->
     `orchestral/anthropic`; `harnesses/claude_code.yaml` -> `claude_code`.
+
+    `benchmark_dir` is one dir or a search path of dirs; an id found in
+    an earlier dir shadows the same id in a later one (extends semantics).
     """
-    root = harnesses_dir(benchmark_dir)
     out: dict[str, Harness] = {}
-    if not root.is_dir():
-        return out
-    for path in sorted(root.rglob("*.yaml")):
-        hid = path.relative_to(root).with_suffix("").as_posix()
-        out[hid] = _load_file(path, hid)
+    for d in _search_dirs(benchmark_dir):
+        root = harnesses_dir(d)
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.yaml")):
+            hid = path.relative_to(root).with_suffix("").as_posix()
+            if hid not in out:
+                out[hid] = _load_file(path, hid)
     return out
 
 
-def load_harness(benchmark_dir: str | Path, harness_id: str) -> Harness:
-    root = harnesses_dir(benchmark_dir)
-    path = root / (harness_id + ".yaml")
-    if not path.is_file():
-        avail = sorted(discover_harnesses(benchmark_dir))
-        raise FileNotFoundError(
-            f"no harness {harness_id!r} (looked for {path}). Available: {avail}"
-        )
-    return _load_file(path, harness_id)
+def load_harness(benchmark_dir, harness_id: str) -> Harness:
+    looked = []
+    for d in _search_dirs(benchmark_dir):
+        path = harnesses_dir(d) / (harness_id + ".yaml")
+        if path.is_file():
+            return _load_file(path, harness_id)
+        looked.append(str(path))
+    avail = sorted(discover_harnesses(benchmark_dir))
+    raise FileNotFoundError(
+        f"no harness {harness_id!r} (looked for {', '.join(looked)}). "
+        f"Available: {avail}"
+    )
 
 
 def _load_file(path: Path, hid: str) -> Harness:
