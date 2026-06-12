@@ -613,7 +613,13 @@ class TrialRunner:
             # version of the configured alias) — kept as reproducibility
             # evidence on the trial record.
             trajectory.resolved_model = model_name
-            if had_cost:
+            # A provider-reported cost of exactly $0 alongside nonzero
+            # token usage is indistinguishable from a proxy that has no
+            # pricing configured for the model (litellm reports cost=0.0
+            # for unpriced routes). Trust positive costs; for zero/absent
+            # cost, try the fallbacks first and only keep the reported $0
+            # when no fallback knows the model (genuinely free routes).
+            if had_cost and tot_cost > 0:
                 trajectory.cost_usd = round(tot_cost, 6)
             else:
                 # 2nd choice: the litellm proxy pricing snapshot.
@@ -622,20 +628,32 @@ class TrialRunner:
                     configured_model or model_name or "",
                     tot_in, tot_out, tot_cache_read,
                 )
-                if proxy_cost is not None:
+                if proxy_cost is not None and proxy_cost > 0:
                     trajectory.cost_usd = round(proxy_cost, 6)
                 else:
-                    # 3rd choice: the static fallback table.
-                    provider_guess = (
-                        "anthropic" if model_name and "claude" in model_name else
-                        "openai" if model_name and ("gpt" in model_name or "o1" in model_name) else
-                        None
-                    )
-                    if provider_guess and model_name:
-                        fallback = cost_usd(provider_guess, model_name,
-                                            tot_in, tot_out, tot_cache_read)
+                    # 3rd choice: the static fallback table. Proxy routes
+                    # prefix the vendor ("azure/claude-haiku-4-5"); the
+                    # table keys on the bare model name.
+                    names = []
+                    for nm in (configured_model, model_name):
+                        if nm:
+                            names += [nm, nm.split("/")[-1]]
+                    fallback = None
+                    for nm in names:
+                        provider_guess = (
+                            "anthropic" if "claude" in nm else
+                            "openai" if ("gpt" in nm or "o1" in nm) else
+                            None
+                        )
+                        if provider_guess:
+                            fallback = cost_usd(provider_guess, nm,
+                                                tot_in, tot_out, tot_cache_read)
                         if fallback is not None:
-                            trajectory.cost_usd = round(fallback, 6)
+                            break
+                    if fallback is not None:
+                        trajectory.cost_usd = round(fallback, 6)
+                    elif had_cost:
+                        trajectory.cost_usd = round(tot_cost, 6)
         except Exception as exc:
             # Token extraction is best-effort. A missing Usage shouldn't
             # tank the trial — but leave a breadcrumb so a missing
