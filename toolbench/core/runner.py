@@ -25,7 +25,7 @@ from .budget import Budget, BudgetExceeded
 from .crash_classifier import classify_crash
 from .failure_modes import (
     AGENT_CRASH, GRADE_ERROR, MODEL_FORMAT_CRASH, MODEL_STOPPED_EARLY, NONE,
-    RATE_LIMITED,
+    RATE_LIMITED, TRANSIENT_API_ERROR,
 )
 from .checks import (
     load_benchmark_checks, load_benchmark_roles, merged_registry, merged_roles,
@@ -94,18 +94,27 @@ class TrialResult:
     attempts: int = 1            # 1 + number of MODEL_FORMAT_CRASH retries
     nudges: int = 0              # presence-gated continue-nudges issued
     rate_limit_retries: int = 0  # RATE_LIMITED backoff resumes used
+    transient_retries: int = 0   # TRANSIENT_API_ERROR backoff resumes used
 
 
 # Hard fallbacks for the orchestral loop knobs, used only when a harness's
 # `loop:` block omits them (and no CLI override is given).
 _LOOP_DEFAULTS = {"max_iterations": 150, "max_format_retries": 2,
-                  "continue_nudges": 0, "max_rate_limit_retries": 3}
+                  "continue_nudges": 0, "max_rate_limit_retries": 3,
+                  "max_transient_retries": 4}
 
 # Backoff schedule for RATE_LIMITED resumes (seconds per retry; the last
 # entry repeats if a harness allows more retries than entries). Generous
 # on purpose: a 429/529 means the provider wants us to back off, and a
 # wasted minute is far cheaper than a wasted trial.
 _RATE_LIMIT_BACKOFF_S = (10, 30, 60)
+
+# Backoff schedule for TRANSIENT_API_ERROR resumes. An unreachable or
+# 5xx-ing endpoint often stays down for tens of seconds; back off harder
+# and for longer than the throttle schedule so a brief outage doesn't
+# wipe out a campaign (the failure mode that zeroed five colliderbench
+# tasks on 2026-06-13 when the endpoint went unreachable mid-run).
+_TRANSIENT_BACKOFF_S = (15, 45, 90, 120)
 
 # Indirection so tests can patch the sleep without touching the global
 # time module (parallel trials sleep in their own worker threads).
@@ -119,7 +128,8 @@ class TrialRunner:
                  litellm_pricing: dict | None = None,
                  max_format_retries: int | None = None,
                  max_continue_nudges: int | None = None,
-                 max_rate_limit_retries: int | None = None):
+                 max_rate_limit_retries: int | None = None,
+                 max_transient_retries: int | None = None):
         self.judge = judge
         self.verbose = verbose
         # Loop knobs are OVERRIDES: None means "defer to the harness's `loop:`
@@ -136,10 +146,15 @@ class TrialRunner:
         #   - max_rate_limit_retries: RATE_LIMITED resumes (provider 429/529;
         #     operational, retried with backoff so throttling doesn't get
         #     recorded as a model failure).
+        #   - max_transient_retries: TRANSIENT_API_ERROR resumes (connect/
+        #     read timeout, dropped connection, HTTP 5xx; operational, so a
+        #     brief endpoint outage doesn't get recorded as a model failure
+        #     or contaminate a campaign).
         self.max_iterations = max_iterations
         self.max_format_retries = max_format_retries
         self.max_continue_nudges = max_continue_nudges
         self.max_rate_limit_retries = max_rate_limit_retries
+        self.max_transient_retries = max_transient_retries
         # Optional snapshot of {model_name: {input, cache_read, output}}
         # captured from the litellm proxy at run start. Used as a cost
         # fallback when the proxy doesn't populate `usage.cost`.
@@ -166,6 +181,7 @@ class TrialRunner:
             ("max_format_retries", self.max_format_retries),
             ("continue_nudges", self.max_continue_nudges),
             ("max_rate_limit_retries", self.max_rate_limit_retries),
+            ("max_transient_retries", self.max_transient_retries),
         ):
             if override is not None:
                 out[key] = int(override)
@@ -190,6 +206,7 @@ class TrialRunner:
         max_format_retries = loop_cfg["max_format_retries"]
         max_continue_nudges = loop_cfg["continue_nudges"]
         max_rate_limit_retries = loop_cfg["max_rate_limit_retries"]
+        max_transient_retries = loop_cfg["max_transient_retries"]
 
         # Per-variant scaffolding: the variant owns the prompts and the
         # sandbox seed (the things that change between difficulty rungs);
@@ -272,6 +289,7 @@ class TrialRunner:
         last_response = None         # Final Message returned by agent.run().
         crash_exc: BaseException | None = None
         format_retries = 0       # MODEL_FORMAT_CRASH resumes used (serialization)
+        transient_retries = 0    # TRANSIENT_API_ERROR backoff resumes used
         nudges = 0               # presence-gated continue-nudges issued
         rate_limit_retries = 0   # RATE_LIMITED backoff resumes used
         try:
@@ -353,6 +371,31 @@ class TrialRunner:
                                 "The previous request was interrupted by a temporary "
                                 "provider error (rate limit). Continue the task from "
                                 "where you left off.")
+                            continue
+                        if (crash_kind == TRANSIENT_API_ERROR
+                                and transient_retries < max_transient_retries):
+                            # Transport/server blip (connect or read timeout,
+                            # dropped connection, HTTP 5xx). The request never
+                            # got a well-formed answer, so the agent's context
+                            # is unchanged — back off and resume the same
+                            # session. Without this, one unreachable-endpoint
+                            # window zeroes out every trial it spans.
+                            delay = _TRANSIENT_BACKOFF_S[
+                                min(transient_retries,
+                                    len(_TRANSIENT_BACKOFF_S) - 1)]
+                            transient_retries += 1
+                            note = (f"\n--- retry {transient_retries}/"
+                                    f"{max_transient_retries} after "
+                                    f"TRANSIENT_API_ERROR (backing off {delay}s, "
+                                    f"resuming same session) ---")
+                            if self.verbose:
+                                print(note, flush=True)
+                            traj_hook.write_to_log(note)
+                            _sleep(delay)
+                            message = (
+                                "The previous request was interrupted by a temporary "
+                                "connection error reaching the model. Continue the "
+                                "task from where you left off.")
                             continue
                         break  # unrecoverable crash, or retries exhausted
 
@@ -506,6 +549,7 @@ class TrialRunner:
             "attempts": attempts,
             "nudges": nudges,
             "rate_limit_retries": rate_limit_retries,
+            "transient_retries": transient_retries,
             "aborted_by_budget": aborted,
             "error": error,
             "artifacts": {
@@ -565,6 +609,7 @@ class TrialRunner:
             attempts=attempts,
             nudges=nudges,
             rate_limit_retries=rate_limit_retries,
+            transient_retries=transient_retries,
         )
 
     def _extract_usage(self, agent, trajectory: Trajectory,

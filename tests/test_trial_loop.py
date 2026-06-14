@@ -81,7 +81,7 @@ class _FakeRunner:
             trial_id=trial_id, ok=not aborted, score=1.0, grade=grade,
             trajectory=Trajectory(), wall_clock_s=0.0, cost_usd=self.cost,
             aborted_by_budget=aborted, error=None, attempts=1, nudges=0,
-            rate_limit_retries=0)
+            rate_limit_retries=0, transient_retries=0)
 
 
 class TestRunTrialLoop(unittest.TestCase):

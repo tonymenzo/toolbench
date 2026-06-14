@@ -23,7 +23,7 @@ import numpy as np
 # REPO_ROOT is placed on sys.path by `eval/__init__.py`.
 from toolbench.core.failure_modes import (
     AGENT_CRASH, GRADE_ERROR, MODEL_FORMAT_CRASH, MODEL_STOPPED_EARLY,
-    NONE, UNKNOWN, incomplete_at,
+    NONE, RATE_LIMITED, TRANSIENT_API_ERROR, UNKNOWN, incomplete_at,
 )
 from toolbench.core.metrics import (
     reach_bar_k, pass_at_k, pass_caret_k,
@@ -56,6 +56,8 @@ _FAILURE_COLORS = {
     incomplete_at("mass_within_tol"):      "#FF9DA6",
     MODEL_FORMAT_CRASH:                    "#D62728",  # bright red — flag prominently
     AGENT_CRASH:                           "#9A6FB0",
+    RATE_LIMITED:                          "#BAB0AC",  # muted — operational, retried
+    TRANSIENT_API_ERROR:                   "#8C8C8C",  # muted — operational, retried
     MODEL_STOPPED_EARLY:                   "#5778A4",
     GRADE_ERROR:                           "#999999",
     UNKNOWN:                               "#cccccc",

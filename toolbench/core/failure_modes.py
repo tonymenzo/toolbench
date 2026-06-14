@@ -31,6 +31,12 @@ trajectory):
                             (HTTP 429 / overloaded) and the runner's
                             bounded backoff retries were exhausted.
                             Operational, not a capability failure.
+  - `TRANSIENT_API_ERROR` — a transient transport/server fault reaching
+                            the provider (connect/read timeout, dropped
+                            connection, HTTP 5xx) that survived the
+                            runner's bounded backoff retries. Operational,
+                            not a capability failure — a single endpoint
+                            blip must not contaminate a whole campaign.
   - `MODEL_STOPPED_EARLY` — model produced an assistant message
                             instead of issuing the next expected tool
                             call (no exception, but no progress).
@@ -55,6 +61,7 @@ AGENT_CRASH             = "AGENT_CRASH"
 MODEL_FORMAT_CRASH      = "MODEL_FORMAT_CRASH"
 CONTEXT_LENGTH_EXCEEDED = "CONTEXT_LENGTH_EXCEEDED"
 RATE_LIMITED            = "RATE_LIMITED"
+TRANSIENT_API_ERROR     = "TRANSIENT_API_ERROR"
 MODEL_STOPPED_EARLY     = "MODEL_STOPPED_EARLY"
 GRADE_ERROR             = "GRADE_ERROR"
 
@@ -68,7 +75,7 @@ INCOMPLETE_AT_PREFIX = "INCOMPLETE_AT_"
 # regrade may legitimately upgrade it to NONE / INCOMPLETE_AT_<id>.
 HARD_PROCESS_FAILURES: frozenset[str] = frozenset({
     AGENT_CRASH, MODEL_FORMAT_CRASH, CONTEXT_LENGTH_EXCEEDED, RATE_LIMITED,
-    GRADE_ERROR,
+    TRANSIENT_API_ERROR, GRADE_ERROR,
 })
 
 

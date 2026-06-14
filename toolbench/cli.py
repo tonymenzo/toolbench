@@ -429,6 +429,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "max_format_retries": args.max_format_retries,
         "continue_nudges": args.continue_nudges,
         "max_rate_limit_retries": args.max_rate_limit_retries,
+        "max_transient_retries": args.max_transient_retries,
         "parallel": args.parallel,
         "dry_run": args.dry_run,
         "versions": {"orchestral-ai": _pkg_version("orchestral-ai"),
@@ -451,6 +452,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         max_format_retries=args.max_format_retries,
         max_continue_nudges=args.continue_nudges,
         max_rate_limit_retries=args.max_rate_limit_retries,
+        max_transient_retries=args.max_transient_retries,
     )
 
     # Tee all run output into a single clean run-level console.log (in
@@ -586,6 +588,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         max_format_retries=manifest.get("max_format_retries"),
         max_continue_nudges=manifest.get("continue_nudges"),
         max_rate_limit_retries=manifest.get("max_rate_limit_retries"),
+        max_transient_retries=manifest.get("max_transient_retries"),
     )
 
     print(f"Resume: {args.run_id}")
@@ -873,6 +876,7 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
             "attempts": result.attempts,
             "nudges": result.nudges,
             "rate_limit_retries": result.rate_limit_retries,
+            "transient_retries": result.transient_retries,
             "aborted_by_budget": result.aborted_by_budget,
         }
 
@@ -1325,6 +1329,14 @@ def cli() -> None:
                    "resume the same session this many times before recording "
                    "the trial as RATE_LIMITED. Default: from the harness "
                    "(hard default 3).")
+@click.option("--max-transient-retries", "max_transient_retries", type=int,
+              default=None,
+              help="Override the harness loop.max_transient_retries: on a "
+                   "transient transport/server fault (connect/read timeout, "
+                   "dropped connection, HTTP 5xx), back off and resume the "
+                   "same session this many times before recording the trial "
+                   "as TRANSIENT_API_ERROR. Default: from the harness "
+                   "(hard default 4).")
 @click.option("--continue-nudges", "continue_nudges", type=int, default=None,
               help="Override the harness loop.continue_nudges: if the model "
                    "self-terminates with a required deliverable still absent "
