@@ -19,6 +19,13 @@ Currently classified:
   `context_length_exceeded`). Long, tool-heavy trials hit this — the
   full message history + the ~26 tool schemas are resent every turn.
   An operational failure, not a capability one.
+- `TRANSIENT_API_ERROR`: a transient transport/server fault on the way
+  to the provider — connect/read timeout, dropped connection, or an
+  HTTP 5xx (500/502/503/504). Distinct from RATE_LIMITED (429/529, an
+  intentional throttle) and from a model failure: the request never got
+  a well-formed answer because the endpoint blipped. The runner retries
+  these with backoff so one unreachable-endpoint window doesn't zero out
+  a whole campaign's worth of trials.
 - `AGENT_CRASH`: anything else uncaught from `agent.run()`.
 
 Add new classifications here when a new failure pattern shows up
@@ -30,6 +37,7 @@ import re
 
 from .failure_modes import (
     AGENT_CRASH, CONTEXT_LENGTH_EXCEEDED, MODEL_FORMAT_CRASH, RATE_LIMITED,
+    TRANSIENT_API_ERROR,
 )
 
 
@@ -64,6 +72,44 @@ _RATE_LIMIT_MARKERS = (
 # unrelated number inside a traceback.
 _RATE_LIMIT_STATUS_RE = re.compile(r"\b(?:429|529)\b")
 
+# Exception *type* names (matched lowercase, substring) that always mean
+# a transient transport fault, independent of message text. Covers the
+# OpenAI SDK (APITimeoutError / APIConnectionError) and the httpx /
+# httpcore stack underneath it (ConnectTimeout / ReadTimeout /
+# ConnectError / PoolTimeout) plus the stdlib ConnectionError family.
+_TRANSIENT_TYPE_MARKERS = (
+    "apitimeouterror",
+    "apiconnectionerror",
+    "connecttimeout",
+    "readtimeout",
+    "writetimeout",
+    "pooltimeout",
+    "connecterror",
+    "connectionerror",
+    "remoteprotocolerror",
+)
+# Message markers for transient transport / server-side faults, matched
+# lowercase. HTTP 5xx is the provider failing to serve a well-formed
+# response (distinct from 429/529 throttling, classified above first).
+_TRANSIENT_MSG_MARKERS = (
+    "timed out",
+    "timeout",
+    "connection error",
+    "connection reset",
+    "connection aborted",
+    "connection refused",
+    "temporarily unavailable",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "internal server error",
+    "server disconnected",
+    "server error",
+)
+# Bare 5xx status tokens, matched standalone so an unrelated number in a
+# traceback can't trip the classifier.
+_TRANSIENT_STATUS_RE = re.compile(r"\b(?:500|502|503|504)\b")
+
 
 def classify_crash(exc: BaseException, traceback_str: str) -> tuple[str, str]:
     """Map an `agent.run()` exception to (failure_mode, reason).
@@ -88,6 +134,9 @@ def classify_crash(exc: BaseException, traceback_str: str) -> tuple[str, str]:
     if _is_context_length_error(exc, traceback_str):
         return CONTEXT_LENGTH_EXCEEDED, _context_length_reason(exc, traceback_str)
 
+    if _is_transient_api_error(exc, traceback_str):
+        return TRANSIENT_API_ERROR, _transient_reason(exc)
+
     return AGENT_CRASH, _short_reason(exc, traceback_str)
 
 
@@ -111,6 +160,32 @@ def _rate_limit_reason(exc: BaseException) -> str:
     if len(head) > 160:
         head = head[:159] + "…"
     return f"provider throttled the request: {head}"
+
+
+def _is_transient_api_error(exc: BaseException, traceback_str: str) -> bool:
+    """True if the request failed on a transient transport / server fault.
+
+    Matched on the exception type-name chain (so an `APITimeoutError`
+    wrapping an httpx `ConnectTimeout` classifies regardless of message)
+    plus provider-agnostic message markers and bare 5xx status tokens.
+    Called only *after* the rate-limit and context-length checks, so a
+    429/529 throttle or a 400 context overflow can never be misfiled
+    here.
+    """
+    names = f"{type(exc).__name__} {traceback_str}".lower()
+    if any(marker in names for marker in _TRANSIENT_TYPE_MARKERS):
+        return True
+    blob = f"{exc} {traceback_str}".lower()
+    if any(marker in blob for marker in _TRANSIENT_MSG_MARKERS):
+        return True
+    return bool(_TRANSIENT_STATUS_RE.search(str(exc)))
+
+
+def _transient_reason(exc: BaseException) -> str:
+    head = f"{type(exc).__name__}: {exc}".replace("\n", " ").strip()
+    if len(head) > 160:
+        head = head[:159] + "…"
+    return f"transient transport/server fault reaching the provider: {head}"
 
 
 def _is_context_length_error(exc: BaseException, traceback_str: str) -> bool:
