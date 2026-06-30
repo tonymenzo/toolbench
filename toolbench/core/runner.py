@@ -308,6 +308,11 @@ class TrialRunner:
                     llm=llm, tools=tools, tool_hooks=hooks,
                     system_prompt=system_prompt,
                     display_hook=display_hook,
+                    # Additive context: runtimes driving an external agent
+                    # process (claude_code) scope a config-file MCP server
+                    # to the sandbox. Orchestral ignores these via **_.
+                    sandbox_dir=str(sandbox_dir),
+                    harness=harness, loadout=loadout,
                 )
                 # One resume loop over the SAME agent / sandbox / context.
                 # After each agent.run we either:
