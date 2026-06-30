@@ -99,7 +99,7 @@ class TrialResult:
 
 # Hard fallbacks for the orchestral loop knobs, used only when a harness's
 # `loop:` block omits them (and no CLI override is given).
-_LOOP_DEFAULTS = {"max_iterations": 150, "max_format_retries": 2,
+_LOOP_DEFAULTS = {"max_iterations": 150, "max_format_retries": 3,
                   "continue_nudges": 0, "max_rate_limit_retries": 3,
                   "max_transient_retries": 4}
 
@@ -308,6 +308,11 @@ class TrialRunner:
                     llm=llm, tools=tools, tool_hooks=hooks,
                     system_prompt=system_prompt,
                     display_hook=display_hook,
+                    # Additive context: runtimes driving an external agent
+                    # process (claude_code) scope a config-file MCP server
+                    # to the sandbox. Orchestral ignores these via **_.
+                    sandbox_dir=str(sandbox_dir),
+                    harness=harness, loadout=loadout,
                 )
                 # One resume loop over the SAME agent / sandbox / context.
                 # After each agent.run we either:
@@ -347,9 +352,16 @@ class TrialRunner:
                             message = (
                                 "Your previous tool call could not be executed: its "
                                 f"arguments were not valid JSON ({detail}). Re-issue "
-                                "that tool call now as a single well-formed JSON object "
-                                "(escape newlines as \\n and quotes as \\\"), then "
-                                "continue.")
+                                "that tool call now as a single well-formed JSON object, "
+                                "following these rules:\n"
+                                "1. The arguments must be LITERAL JSON, not Python. Do "
+                                "not use expressions like \"x\"*1024 or string "
+                                "concatenation; write out the final literal value.\n"
+                                "2. When a value contains code, text, or LaTeX (e.g. a "
+                                "`data` argument), JSON-escape every special character: "
+                                "backslash as \\\\, newline as \\n, tab as \\t, and "
+                                "double-quote as \\\". Avoid stray non-ASCII whitespace.\n"
+                                "Then continue the task.")
                             continue
                         if (crash_kind == RATE_LIMITED
                                 and rate_limit_retries < max_rate_limit_retries):
