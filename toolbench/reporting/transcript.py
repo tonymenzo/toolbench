@@ -247,25 +247,81 @@ def render_header(*, trial_id: str, model: str, provider: str, task: str,
     return "\n".join(lines)
 
 
+# Multi-line tool arguments (Bash heredocs, file contents, code blobs) are
+# rendered as a clearly-labelled, bounded block beneath the call line rather
+# than spilling raw newlines into the column-aligned stream.
+_BODY_MAX_LINES = 12        # lines shown before truncation
+_BODY_MAX_CHARS = 1400      # total chars shown before truncation
+_BODY_KEYS = ("command", "content", "new_string", "old_string", "data",
+              "code", "file_text", "card_text", "query", "input")
+
+
+def _oneline(s: str) -> str:
+    """Collapse all whitespace (incl. newlines) to single spaces."""
+    return " ".join(str(s).split())
+
+
+def _primary_body(args: dict):
+    """Return (label, text) for the most informative multi-line / long string
+    argument worth showing as a block, or None. Prefers known body keys."""
+    if not args:
+        return None
+    def _big(v):
+        return isinstance(v, str) and ("\n" in v or len(v) > 160)
+    for k in _BODY_KEYS:
+        v = args.get(k)
+        if _big(v):
+            return k, v
+    for k, v in args.items():
+        if not k.startswith("_") and k not in _NOISY_ARG_KEYS and _big(v):
+            return k, v
+    return None
+
+
 def render_call_line(*, t_start: float, name: str, args: dict,
                      duration: float, ok: bool, err_msg: str = "") -> list[str]:
     """One column-aligned line per completed tool call.
 
-    Returns a list of rendered lines: a single line for OK calls, plus
-    an indented `|-- error` continuation line when not ok and an err_msg
-    is provided.
+    Returns a list of rendered lines: the call line (always single-line, with
+    whitespace collapsed so nothing spills), then — for a multi-line / long
+    argument such as a Bash command or a written file — a clearly-labelled
+    indented block (`+-- <arg> (N lines):` … `|   …` … `+-- (+K more)`),
+    bounded by line and character caps. A failed call adds an indented
+    `|-- error` continuation.
     """
     time_col   = fmt_elapsed(t_start).ljust(W_TIME)
     tool_col   = name.ljust(W_TOOL)
     status_col = ("FAIL" if not ok else "").ljust(W_STATUS)
     dur_col    = fmt_duration(duration).ljust(W_DURATION)
-    summary    = call_summary(name, args)
+    summary    = _oneline(call_summary(name, args))
     line = f"{time_col}  {tool_col}  {status_col}{dur_col}  {summary}".rstrip()
     out = [line]
+
+    indent = " " * (W_TIME + 2)
+    body = _primary_body(args)
+    if body is not None:
+        label, text = body
+        body_lines = text.splitlines() or [text]
+        n = len(body_lines)
+        out.append(f"{indent}+-- {label} ({n} line{'s' if n != 1 else ''}):")
+        shown = chars = 0
+        bp = indent + "|   "
+        for bl in body_lines[:_BODY_MAX_LINES]:
+            bl = bl.rstrip()
+            if chars + len(bl) > _BODY_MAX_CHARS:
+                bl = bl[:max(0, _BODY_MAX_CHARS - chars)] + "…"
+            out.append(bp + _truncate_word(bl, LINE_WIDTH - len(bp)))
+            shown += 1
+            chars += len(bl)
+            if chars >= _BODY_MAX_CHARS:
+                break
+        rem = n - shown
+        if rem > 0:
+            out.append(f"{indent}+-- (+{rem} more line{'s' if rem != 1 else ''}, truncated)")
+
     if (not ok) and err_msg:
-        # Continuation line indented under the TOOL column.
-        prefix = " " * (W_TIME + 2) + "|-- "
-        out.append(prefix + _truncate_word(err_msg.strip(), LINE_WIDTH - len(prefix)))
+        prefix = indent + "|-- "
+        out.append(prefix + _truncate_word(_oneline(err_msg), LINE_WIDTH - len(prefix)))
     return out
 
 
