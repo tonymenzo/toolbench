@@ -47,6 +47,7 @@ from toolbench.core.metrics import (
 from toolbench.reporting._shared import (
     short_model_name, stage_matrix_from_rows, subplot_grid,
 )
+from toolbench.reporting._output import save_figure, write_figure_data
 
 
 # Categorical palette: one color per stage, cycled if N > len(palette).
@@ -117,9 +118,12 @@ def render_per_stage_k(summary: dict, trials: list[dict], manifest: dict,
     )
     axes_flat = list(axes.flat)
 
+    series_by_cell: list[dict] = []
     for ax, cell in zip(axes_flat, cells):
         rows = by_cell.get((cell.get("model"), cell.get("condition")), [])
-        _plot_cell(ax, cell, rows, stage_order=stage_order)
+        cell_data = _plot_cell(ax, cell, rows, stage_order=stage_order)
+        if cell_data is not None:
+            series_by_cell.append(cell_data)
 
     # Hide unused panels (only matters when len(cells) < nrows*ncols).
     for ax in axes_flat[len(cells):]:
@@ -132,26 +136,43 @@ def render_per_stage_k(summary: dict, trials: list[dict], manifest: dict,
 
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.subplots_adjust(top=0.87)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    save_figure(fig, output_path, dpi=150)
     plt.close(fig)
+
+    write_figure_data(output_path, {
+        "figure": "per_stage_k",
+        "run_id": summary.get("run_id", ""),
+        "metrics": {
+            "rho_at_k":     "per-stage best-of-k reach  rho_i(k) = 1-(1-P_i)^k (solid)",
+            "sigma_caret_k": "per-stage worst-of-k reach sigma_i(k) = P_i^k     (dotted)",
+            "reach_at_k_eqw":    "integrated best-of-k reach, equal-weighted",
+            "reach_caret_k_eqw": "integrated worst-of-k reach, equal-weighted",
+            "P_hat": "hat P_i = c_reached / n, cumulative absorbing probability",
+        },
+        "cells": series_by_cell,
+    })
     return True
 
 
 def _plot_cell(ax, cell: dict, rows: list[dict], *,
-               stage_order: list[str] | None) -> None:
-    """Draw rho_i(k) and sigma_i(k) overlays for one cell on a single panel."""
+               stage_order: list[str] | None) -> dict | None:
+    """Draw rho_i(k) and sigma_i(k) overlays for one cell on a single panel.
+
+    Returns the exact per-stage and integrated series drawn (for the data
+    sidecar), or `None` for an empty panel (no trials / no stages).
+    """
     title = f"{short_model_name(cell.get('model', '?'))}  ×  {cell.get('condition', '?')}"
 
     if not rows:
         ax.set_title(f"{title}  (no trials)", fontsize=10)
         ax.axis("off")
-        return
+        return None
 
     canonical = stage_order or list((rows[0].get("stages") or {}).keys())
     if not canonical:
         ax.set_title(f"{title}  (no stages)", fontsize=10)
         ax.axis("off")
-        return
+        return None
 
     n = len(rows)
     N = len(canonical)
@@ -197,6 +218,7 @@ def _plot_cell(ax, cell: dict, rows: list[dict], *,
 
     stage_handles: list[Line2D] = []
     stage_labels:  list[str] = []
+    stage_series: dict[str, dict] = {}
     for i, sid in enumerate(canonical):
         c_i = c_per_stage[i]
         P_hat = c_i / n if n > 0 else 0.0
@@ -207,6 +229,13 @@ def _plot_cell(ax, cell: dict, rows: list[dict], *,
 
         rho_curve   = [pass_at_k(n, c_i, k)    for k in ks]
         sigma_curve = [pass_caret_k(n, c_i, k) for k in ks]
+
+        stage_series[sid] = {
+            "c_reached": c_i,
+            "P_hat": P_hat,
+            "rho_at_k": rho_curve,
+            "sigma_caret_k": sigma_curve,
+        }
 
         # rho_i: solid line (best-of-k).
         ax.plot(ks_dodged, rho_curve,
@@ -260,6 +289,19 @@ def _plot_cell(ax, cell: dict, rows: list[dict], *,
               bbox_to_anchor=(1.01, 0.5),
               frameon=False, handlelength=2.4,
               handletextpad=0.6, labelspacing=0.55)
+
+    return {
+        "model": cell.get("model"),
+        "condition": cell.get("condition"),
+        "n": n,
+        "stage_order": canonical,
+        "k": ks,
+        "integrated": {
+            "reach_at_k_eqw": integ_at,
+            "reach_caret_k_eqw": integ_caret,
+        },
+        "stages": stage_series,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

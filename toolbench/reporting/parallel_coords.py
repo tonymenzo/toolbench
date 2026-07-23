@@ -32,6 +32,7 @@ from toolbench.core.metrics import (
 from toolbench.reporting._shared import (
     short_model_name, stage_matrix_from_rows, subplot_grid,
 )
+from toolbench.reporting._output import save_figure, write_figure_data
 
 
 # X positions of the three vertical axes, evenly spaced.
@@ -137,13 +138,16 @@ def render_parallel_coords(summary: dict, trials: list[dict],
     )
     axes_flat = list(axes.flat)
 
+    series_by_cell: list[dict] = []
     for ax, cell in zip(axes_flat, cells):
         rows = by_cell.get((cell.get("model"), cell.get("condition")), [])
         canonical = (stage_order
                      or (list((rows[0].get("stages") or {}).keys()) if rows else []))
         stage_matrix = stage_matrix_from_rows(rows, canonical) if rows else []
-        _draw_cell_panel(ax, cell, stage_matrix, weights,
-                         k_values=k_values, cmap=cmap, norm=norm)
+        cell_data = _draw_cell_panel(ax, cell, stage_matrix, weights,
+                                     k_values=k_values, cmap=cmap, norm=norm)
+        if cell_data is not None:
+            series_by_cell.append(cell_data)
 
     # Hide unused panels.
     for ax in axes_flat[len(cells):]:
@@ -166,8 +170,17 @@ def render_parallel_coords(summary: dict, trials: list[dict],
                  if not run_id else f"{run_id}   ({k_str})")
     fig.suptitle(title, fontsize=11, y=0.995)
 
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    save_figure(fig, output_path, dpi=150)
     plt.close(fig)
+
+    write_figure_data(output_path, {
+        "figure": "parallel_coords",
+        "run_id": summary.get("run_id", ""),
+        "axes": [spec[2] for spec in _AXIS_LABELS],   # reach_bar_k, pass_at_k, pass_caret_k
+        "weights": weights,
+        "k": k_values,
+        "cells": series_by_cell,
+    })
     return True
 
 
@@ -175,14 +188,18 @@ def _draw_cell_panel(ax, cell: dict,
                      stage_matrix: list[list[int]],
                      weights: list[float] | None,
                      *, k_values: list[int],
-                     cmap, norm) -> None:
-    """Draw one (cell) panel with k_values polylines colored by k."""
+                     cmap, norm) -> dict | None:
+    """Draw one (cell) panel with k_values polylines colored by k.
+
+    Returns the exact three-vector polyline per k (for the data
+    sidecar), or `None` for an empty panel.
+    """
     cell_label = f"{short_model_name(cell.get('model', '?'))}  ×  {cell.get('condition', '?')}"
 
     if not stage_matrix:
         ax.set_title(f"{cell_label}  (no trials)", fontsize=10)
         ax.axis("off")
-        return
+        return None
 
     # Vertical axes.
     for x in _AXIS_X:
@@ -198,9 +215,11 @@ def _draw_cell_panel(ax, cell: dict,
                     color="#666", linewidth=1, zorder=2)
 
     # Polylines, color = k.
+    polylines: dict[int, list[float]] = {}
     for k in k_values:
         color = cmap(norm(k))
         vals = _three_vector_at_k(stage_matrix, weights, k)
+        polylines[k] = list(vals)   # (reach_bar_k, pass_at_k, pass_caret_k)
         ys = [v * (_Y_MAX - _Y_MIN) + _Y_MIN for v in vals]
         ax.plot(_AXIS_X, ys,
                 color=color, linewidth=_LINEWIDTH,
@@ -225,6 +244,13 @@ def _draw_cell_panel(ax, cell: dict,
     ax.set_ylim(_Y_MIN - 1.1, _Y_MAX + 1.0)
     ax.axis("off")
     ax.set_title(cell_label, fontsize=10, pad=18)
+
+    return {
+        "model": cell.get("model"),
+        "condition": cell.get("condition"),
+        "axes": [spec[2] for spec in _AXIS_LABELS],
+        "polylines": polylines,   # {k: [reach_bar_k, pass_at_k, pass_caret_k]}
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
