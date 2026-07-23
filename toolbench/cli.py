@@ -370,6 +370,35 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
     harnesses = [all_h[h] for h in h_ids]
 
+    # Judge selection: CLI > the run harness's `judge:` block > rule. An LLM
+    # judge (rule+llm) runs serially after the authoritative rule grade; the
+    # judge harness is resolved against the full discovered map, so it may be
+    # a harness this run is NOT executing the agent on (e.g. a subscription
+    # judge over an API run). Built once — a run is a single benchmark, so the
+    # judge's benchmark_dir and model are constant across trials.
+    from toolbench.core.judge_select import build_llm_judge, resolve as _resolve_judge
+    _run_harness_judge = getattr(harnesses[0], "judge", None) if harnesses else None
+    if getattr(args, "judge", None) == "llm":
+        print("--judge llm is not offered on a scored run (the headline number "
+              "must stay deterministic). Use rule+llm, or `regrade --judge llm`.",
+              file=sys.stderr)
+        return 2
+    try:
+        judge_spec = _resolve_judge(
+            _run_harness_judge,
+            cli_judge=getattr(args, "judge", None),
+            cli_harness=getattr(args, "judge_harness", None),
+            cli_model=getattr(args, "judge_model", None),
+        )
+        llm_judge = build_llm_judge(
+            judge_spec,
+            benchmark_dir=(getattr(benchmark, "search_dirs", None)
+                           or str(getattr(benchmark, "BENCHMARK_DIR", ""))),
+            harnesses=all_h)
+    except ValueError as e:
+        print(f"judge selection failed: {e}", file=sys.stderr)
+        return 2
+
     # Loadout(s) — default from benchmark.yaml's default_loadout.
     all_l = discover_loadouts(benchmark.search_dirs)
     l_names = _split(args.loadouts) or (
@@ -478,7 +507,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "conditions": l_names,
         "n_per_cell": args.n,
         "seeds": seeds,
-        "judge": {"kind": "rule"},
+        "judge": {"kind": "+".join(judge_spec.kinds),
+                  "harness": judge_spec.harness, "model": judge_spec.model},
         "max_cost_usd": args.max_cost_usd,
         "max_iterations": args.max_iterations,
         "max_format_retries": args.max_format_retries,
@@ -512,6 +542,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         max_continue_nudges=args.continue_nudges,
         max_rate_limit_retries=args.max_rate_limit_retries,
         max_transient_retries=args.max_transient_retries,
+        llm_judge=llm_judge,
     )
 
     # Tee all run output into a single clean run-level console.log (in
@@ -643,6 +674,25 @@ def cmd_resume(args: argparse.Namespace) -> int:
                   if args.max_cost_usd is not None
                   else manifest.get("max_cost_usd"))
     budget = Budget(budget_cap)
+
+    # Rebuild the LLM judge from the manifest so a resumed run keeps the same
+    # judging configuration as the original — silently dropping it would leave
+    # resumed trials ungraded by the judge and skew any agreement analysis.
+    from toolbench.core.judge_select import build_llm_judge, resolve as _resolve_judge
+    llm_judge = None
+    _mj = manifest.get("judge") or {}
+    if isinstance(_mj, dict) and "llm" in str(_mj.get("kind", "")).split("+"):
+        try:
+            _spec = _resolve_judge(_mj)
+            llm_judge = build_llm_judge(
+                _spec,
+                benchmark_dir=(getattr(benchmark, "search_dirs", None)
+                               or str(getattr(benchmark, "BENCHMARK_DIR", ""))),
+                harnesses=all_h)
+        except ValueError as e:
+            print(f"warning: could not rebuild LLM judge on resume: {e}",
+                  file=sys.stderr)
+
     runner = TrialRunner(
         # These are overrides (None → defer to each harness's loop block,
         # re-read from disk on resume). Replay the original run's overrides.
@@ -711,11 +761,37 @@ def cmd_regrade(args: argparse.Namespace) -> int:
         return 2
 
     checks_path = getattr(benchmark, "checks_module_path", lambda: None)()
-    judge = RuleJudge(
-        registry=merged_registry(load_benchmark_checks(checks_path)),
-        benchmark_dir=(getattr(benchmark, "search_dirs", None)
-                       or str(getattr(benchmark, "BENCHMARK_DIR", ""))),
-    )
+    _bench_dir = (getattr(benchmark, "search_dirs", None)
+                  or str(getattr(benchmark, "BENCHMARK_DIR", "")))
+    # Judge selection: CLI > the run's harness `judge:` block > rule. Applying
+    # an LLM judge here (rather than at run time) is the cheap path — the
+    # artifacts are already on disk, so any number of judges can be run over a
+    # finished campaign at zero additional agent cost.
+    from .core.harness import discover_harnesses
+    from .core.judge_select import build_judge, resolve as _resolve_judge
+    _harnesses = discover_harnesses(
+        getattr(benchmark, "search_dirs", None)
+        or getattr(benchmark, "BENCHMARK_DIR", ""))
+    _run_harness = _harnesses.get((manifest.get("harnesses") or [{}])[0].get("id")
+                                  if manifest.get("harnesses") else None)
+    try:
+        _spec = _resolve_judge(
+            getattr(_run_harness, "judge", None),
+            cli_judge=getattr(args, "judge", None),
+            cli_harness=getattr(args, "judge_harness", None),
+            cli_model=getattr(args, "judge_model", None),
+        )
+        judge = build_judge(
+            _spec,
+            registry=merged_registry(load_benchmark_checks(checks_path)),
+            benchmark_dir=_bench_dir,
+            harnesses=_harnesses,
+        )
+    except ValueError as e:
+        print(f"judge selection failed: {e}", file=sys.stderr)
+        return 2
+    if _spec.wants_llm:
+        print(f"  judge: {_spec.label()}")
 
     stage_order = [s["id"] for s in benchmark.rubric.stages]
     stage_weights = {s["id"]: float(s.get("weight", 0.0))
@@ -1531,6 +1607,23 @@ def cli() -> None:
                    "'you haven't finished' nudge this many times. Never fires "
                    "when the deliverable exists (no oracle leakage); recorded "
                    "per trial. Default: from the harness.")
+@click.option("--judge", "judge", default=None,
+              help="Which judge(s) grade this run: 'rule' (default, "
+                   "deterministic) or 'rule+llm'. With 'rule+llm', the RULE "
+                   "grade stays authoritative and an LLM judge runs SERIALLY "
+                   "after it against the finished sandbox, its result attached "
+                   "in alt_grades (never affects the score or failure mode). "
+                   "Overrides the run harness's `judge:` block. 'llm' alone is "
+                   "not offered on a scored run — the headline number must stay "
+                   "deterministic; use `regrade --judge llm` for that.")
+@click.option("--judge-harness", "judge_harness", default=None,
+              help="Harness the JUDGE is called through, e.g. "
+                   "orchestral/anthropic or claude-code/default. May differ "
+                   "from the harness under test — that is what lets a "
+                   "subscription model judge an API model's run and vice versa.")
+@click.option("--judge-model", "judge_model", default=None,
+              help="Model the judge uses. Defaults to the judge harness's own "
+                   "provider.model.")
 @click.option("--parallel", "parallel", type=int, default=1, show_default=True,
               help="Trials in flight at once. Each trial is self-contained "
                    "(own sandbox/agent/LLM client), so this is safe; mind "
@@ -1570,10 +1663,26 @@ def _resume(**kw) -> int:
 @cli.command("regrade", short_help="Re-judge a run's preserved artifacts.")
 @click.option("--run-id", "run_id", required=True,
               help="Existing run directory under runs/.")
+@click.option("--judge", "judge", default=None,
+              help="Which judge(s) grade this run: 'rule' (default, "
+                   "deterministic), 'rule+llm' (both; the RULE grade stays "
+                   "authoritative and the LLM grade rides along in "
+                   "alt_grades), or 'llm' (ablation only — the score would "
+                   "then drift with the judge model's version). Overrides "
+                   "the harness's `judge:` block.")
+@click.option("--judge-harness", "judge_harness", default=None,
+              help="Harness the JUDGE is called through, e.g. "
+                   "orchestral/anthropic or claude-code/default. May differ "
+                   "from the harness under test — that is what lets a "
+                   "subscription model judge an API model's run and vice "
+                   "versa.")
+@click.option("--judge-model", "judge_model", default=None,
+              help="Model the judge uses. Defaults to the judge harness's "
+                   "own provider.model.")
 def _regrade(**kw) -> int:
-    """Re-run the rule judge against an existing run's preserved artifacts. Use
-    after rubric changes (new content/numeric checks) to refresh grades +
-    summary without re-executing any agent."""
+    """Re-judge an existing run's preserved artifacts. Use after rubric changes
+    to refresh grades + summary without re-executing any agent — and to apply an
+    LLM judge retroactively, so judging never has to be decided at run time."""
     return cmd_regrade(SimpleNamespace(**kw))
 
 

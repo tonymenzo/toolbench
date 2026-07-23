@@ -35,6 +35,14 @@ class Harness:
     core: dict                          # {tools: [...]} XOR {builtin: true}
     loop: dict = field(default_factory=dict)
     id: str = ""                        # path-stem id, e.g. "orchestral/anthropic"
+    # Optional default judge for runs on this harness:
+    #   judge: {kind: rule+llm, harness: orchestral/anthropic, model: claude-opus-4-8}
+    # A benchmark family that always wants a second opinion can pin it here
+    # instead of repeating CLI flags. `--judge*` overrides field by field, so
+    # a harness can fix the judge model while the CLI flips rule <-> rule+llm.
+    # Note this names a judge, NOT the agent under test: `harness` here is the
+    # route the JUDGE is called through, and may differ from this harness.
+    judge: dict = field(default_factory=dict)
 
     @property
     def runtime_name(self) -> str:
@@ -53,6 +61,7 @@ class Harness:
             provider=data.get("provider") or {},
             core=data.get("core") or {},
             loop=data.get("loop") or {},
+            judge=data.get("judge") or {},
             id=id,
         )
 
@@ -69,6 +78,21 @@ class Harness:
                 "`tools: [...]` (supply orchestral primitives) or "
                 "`builtin: true` (the runtime ships its own)."
             )
+        if self.judge:
+            if not isinstance(self.judge, dict):
+                raise ValueError(
+                    f"harness {self.id!r}: `judge` must be a mapping "
+                    "{kind, harness, model}")
+            unknown = set(self.judge) - {"kind", "harness", "model",
+                                         "max_tokens", "temperature"}
+            if unknown:
+                raise ValueError(
+                    f"harness {self.id!r}: unknown judge key(s) "
+                    f"{sorted(unknown)}; known: kind, harness, model, "
+                    "max_tokens, temperature")
+            # Fail at load time rather than after a paid run.
+            from .judge_select import resolve
+            resolve(self.judge)
 
 
 def harnesses_dir(benchmark_dir: str | Path) -> Path:
