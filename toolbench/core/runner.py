@@ -129,8 +129,17 @@ class TrialRunner:
                  max_format_retries: int | None = None,
                  max_continue_nudges: int | None = None,
                  max_rate_limit_retries: int | None = None,
-                 max_transient_retries: int | None = None):
+                 max_transient_retries: int | None = None,
+                 llm_judge: Judge | None = None):
         self.judge = judge
+        # Optional LLM judge run SERIALLY AFTER the authoritative rule grade,
+        # against the finished sandbox (mirrors the post-completion UX turn:
+        # opt-in, its result attached additively in grade.alt_grades, its
+        # failures swallowed so a judge hiccup never sinks a graded trial).
+        # Built once per run because a run is a single benchmark, so its
+        # benchmark_dir and judge model are constant across trials. None on the
+        # common rule-only path.
+        self.llm_judge = llm_judge
         self.verbose = verbose
         # Loop knobs are OVERRIDES: None means "defer to the harness's `loop:`
         # block" (the source of truth, runtime-specific to orchestral); a
@@ -494,12 +503,41 @@ class TrialRunner:
             # was still issuing tool calls).
             grade.failure_mode = MODEL_STOPPED_EARLY
 
+        # Post-grade LLM-judge phase (opt-in, SERIAL, non-authoritative).
+        # The rule grade above is final and untouched; this runs a separate
+        # judge against the same finished sandbox and attaches its grade to
+        # grade.alt_grades. It reads only sandbox files (like the rule judge),
+        # so it is safe after tool teardown. A judge failure is recorded on
+        # the alt grade and never disturbs the trial's score or failure mode —
+        # the same discipline as the UX turn. Skipped after an unrecoverable
+        # crash, when there is no delivered work to judge.
+        if self.llm_judge is not None and crash_exc is None:
+            note = f"\n--- LLM-judge phase ({self.llm_judge.kind}) ---"
+            if self.verbose:
+                print(note, flush=True)
+            traj_hook.write_to_log(note)
+            try:
+                alt = self.llm_judge.grade(trajectory, benchmark.rubric,
+                                           str(sandbox_dir))
+                grade.alt_grades.append(alt.to_dict())
+                traj_hook.write_to_log(
+                    f"\n--- LLM judge: score {alt.score} "
+                    f"({alt.judge_kind}) ---")
+            except Exception as e:
+                grade.alt_grades.append({
+                    "judge_kind": getattr(self.llm_judge, "kind", "llm"),
+                    "error": f"{type(e).__name__}: {e}"})
+                traj_hook.write_to_log(
+                    "\n--- LLM-judge phase failed (ignored) ---\n"
+                    f"{type(e).__name__}: {e}")
+
         # Emit the styled END / RESULT / COST block.
         stage_order = [s["id"] for s in benchmark.rubric.stages]
         stage_w = [float(s.get("weight", 0.0)) for s in benchmark.rubric.stages]
-        row = [1 if grade.stages.get(sid) else 0 for sid in stage_order]
-        reach_list = per_trial_reach([row], stage_w) if stage_order else []
-        trial_reach = reach_list[0] if reach_list else 0.0
+        # grade.score IS the per-trial reach R_j (continuous when the rubric has
+        # `continuous` stages, else the binary prefix-product) — use it directly
+        # so the footer matches the recorded score.
+        trial_reach = grade.score
         passed = bool(grade.stages) and all(grade.stages.values())
         failure_reason = ""
         # For AGENT_CRASH / GRADE_ERROR / MODEL_STOPPED_EARLY, the
