@@ -164,9 +164,9 @@ def missing_presence(rubric, sandbox: str | Path, *, registry: dict | None = Non
     return "; ".join(failed[:3])
 
 
-def run_check(name: str, sandbox: str | Path, params: dict | None, *,
-              benchmark_dir: str | Path | list[Path] | None = None,
-              registry: dict | None = None) -> tuple[bool, str]:
+def run_check_full(name: str, sandbox: str | Path, params: dict | None, *,
+                   benchmark_dir: str | Path | list[Path] | None = None,
+                   registry: dict | None = None) -> tuple[bool, str, dict]:
     """Dispatch a single check by name. `params` is the check's config
     (everything under its key in the rubric stage). A relative
     `reference:` param is resolved against `benchmark_dir` — one dir, or
@@ -179,7 +179,7 @@ def run_check(name: str, sandbox: str | Path, params: dict | None, *,
     registry = registry if registry is not None else BUILTIN_CHECKS
     fn = registry.get(name)
     if fn is None:
-        return False, f"unknown check {name!r}. Known: {sorted(registry)}"
+        return False, f"unknown check {name!r}. Known: {sorted(registry)}", {}
     p = dict(params or {})
     ref = p.get("reference")
     if ref and benchmark_dir and not os.path.isabs(str(ref)):
@@ -189,6 +189,23 @@ def run_check(name: str, sandbox: str | Path, params: dict | None, *,
         chosen = next((d for d in dirs if (d / str(ref)).exists()), dirs[0])
         p["reference"] = str(chosen / str(ref))
     try:
-        return fn(Path(sandbox), p)
+        result = fn(Path(sandbox), p)
     except Exception as e:  # never let a check crash the judge
-        return False, f"{name} raised {type(e).__name__}: {e}"
+        return False, f"{name} raised {type(e).__name__}: {e}", {}
+    # Checks return (ok, msg) or, when they want to record continuous
+    # diagnostics (e.g. a distance-to-reference), (ok, msg, metrics).
+    if isinstance(result, tuple) and len(result) == 3:
+        ok, msg, metrics = result
+        return bool(ok), str(msg), dict(metrics or {})
+    ok, msg = result
+    return bool(ok), str(msg), {}
+
+
+def run_check(name: str, sandbox: str | Path, params: dict | None, *,
+              benchmark_dir: str | Path | list[Path] | None = None,
+              registry: dict | None = None) -> tuple[bool, str]:
+    """Backward-compatible 2-tuple entry point (the metrics dict is dropped).
+    Callers that want the continuous diagnostics use `run_check_full`."""
+    ok, msg, _ = run_check_full(name, sandbox, params,
+                                benchmark_dir=benchmark_dir, registry=registry)
+    return ok, msg

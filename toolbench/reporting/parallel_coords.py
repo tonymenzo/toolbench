@@ -30,6 +30,7 @@ from toolbench.core.metrics import (
     pass_at_k, pass_caret_k, per_trial_reach,
 )
 from toolbench.reporting._shared import (
+    gating_from_rows, pass_count_from_rows,
     short_model_name, stage_matrix_from_rows, subplot_grid,
 )
 from toolbench.reporting._output import save_figure, write_figure_data
@@ -66,20 +67,27 @@ _MARKER_SIZE  = 5
 _ALPHA        = 0.95
 
 
-def _three_vector_at_k(stage_matrix: list[list[int]],
+def _three_vector_at_k(stage_matrix: list[list[float]],
                        weights: list[float] | None,
-                       k: int) -> tuple[float, float, float]:
+                       k: int,
+                       gating: list[bool] | None = None,
+                       pass_count: int | None = None,
+                       ) -> tuple[float, float, float]:
     """Return (reach_bar_k, pass@k, pass^k) for a given k.
 
     `reach_bar_k` is independent of k in expectation; we still recompute
-    each time so callers don't have to pass it separately.
+    each time so callers don't have to pass it separately. Reach uses the
+    graded credit matrix with `gating`; the pass family uses `pass_count` (the
+    k-independent number of passing trials, per the run's pass criterion). If
+    `pass_count` is None it falls back to the binary all-stages count.
     """
-    R = per_trial_reach(stage_matrix, weights)
+    R = per_trial_reach(stage_matrix, weights, gating)
     n = len(R)
     if n == 0:
         return 0.0, 0.0, 0.0
     reach_bar = sum(R) / n
-    c = sum(1 for row in stage_matrix if row and all(row))
+    c = (pass_count if pass_count is not None
+         else sum(1 for row in stage_matrix if row and all(row)))
     k = min(k, n)
     return reach_bar, pass_at_k(n, c, k), pass_caret_k(n, c, k)
 
@@ -117,6 +125,7 @@ def render_parallel_coords(summary: dict, trials: list[dict],
     rw = manifest.get("reach_weights") or {}
     stage_order = rw.get("stage_order")
     weights     = rw.get("w")
+    pass_threshold = rw.get("pass_threshold")
 
     n_per_cell = summary.get("k") or manifest.get("n_per_cell") or 1
     if k_values is None:
@@ -144,8 +153,11 @@ def render_parallel_coords(summary: dict, trials: list[dict],
         canonical = (stage_order
                      or (list((rows[0].get("stages") or {}).keys()) if rows else []))
         stage_matrix = stage_matrix_from_rows(rows, canonical) if rows else []
+        gating = gating_from_rows(rows, canonical) if rows else None
+        pass_count = pass_count_from_rows(rows, pass_threshold) if rows else 0
         cell_data = _draw_cell_panel(ax, cell, stage_matrix, weights,
-                                     k_values=k_values, cmap=cmap, norm=norm)
+                                     k_values=k_values, cmap=cmap, norm=norm,
+                                     gating=gating, pass_count=pass_count)
         if cell_data is not None:
             series_by_cell.append(cell_data)
 
@@ -185,10 +197,13 @@ def render_parallel_coords(summary: dict, trials: list[dict],
 
 
 def _draw_cell_panel(ax, cell: dict,
-                     stage_matrix: list[list[int]],
+                     stage_matrix: list[list[float]],
                      weights: list[float] | None,
                      *, k_values: list[int],
-                     cmap, norm) -> dict | None:
+                     cmap, norm,
+                     gating: list[bool] | None = None,
+                     pass_count: int | None = None,
+                     ) -> dict | None:
     """Draw one (cell) panel with k_values polylines colored by k.
 
     Returns the exact three-vector polyline per k (for the data
@@ -218,7 +233,8 @@ def _draw_cell_panel(ax, cell: dict,
     polylines: dict[int, list[float]] = {}
     for k in k_values:
         color = cmap(norm(k))
-        vals = _three_vector_at_k(stage_matrix, weights, k)
+        vals = _three_vector_at_k(stage_matrix, weights, k,
+                                  gating, pass_count)
         polylines[k] = list(vals)   # (reach_bar_k, pass_at_k, pass_caret_k)
         ys = [v * (_Y_MAX - _Y_MIN) + _Y_MIN for v in vals]
         ax.plot(_AXIS_X, ys,
