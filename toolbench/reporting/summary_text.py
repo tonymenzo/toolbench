@@ -44,6 +44,11 @@ def render_run_summary(summary: dict, manifest: dict | None = None,
     out.extend(_render_run_header(summary, manifest))
     out.append(RULE_DOUBLE)
 
+    integ_block = _render_integrity(summary)
+    if integ_block:
+        out.append("")
+        out.extend(integ_block)
+
     for cell in summary.get("cells", []):
         out.append("")
         out.append("")
@@ -106,7 +111,36 @@ def _render_run_header(summary: dict, manifest: dict) -> list[str]:
         tail.append(f"harness {', '.join(prov['harnesses'])}")
     if tail:
         lines.append(f"  provenance {'   '.join(tail)}")
+    integ = summary.get("integrity") or {}
+    if "scanned" in integ:
+        nf = len(integ.get("flagged") or {})
+        status = (f"CLEAN ({integ['scanned']} trials scanned)" if nf == 0
+                  else f"** {nf} TRIAL(S) QUARANTINED — reached the answer key **")
+        lines.append(f"  integrity  {status}")
     return lines
+
+
+def _render_integrity(summary: dict) -> list[str]:
+    """Loud section listing any trial quarantined for reaching the ground-truth
+    answer key, with a snippet of evidence. Emitted only when something was
+    flagged; a clean run just gets the one-line header assurance."""
+    integ = summary.get("integrity") or {}
+    flagged = integ.get("flagged") or {}
+    if not flagged:
+        return []
+    out = ["!" * LINE_WIDTH,
+           "  INTEGRITY ALERT — trials quarantined (scored 0)",
+           "  " + "-" * 44, "",
+           "  These trials referenced the graded answer key outside their",
+           "  sandbox; their scores are voided and excluded from the headline.",
+           ""]
+    for tid, info in flagged.items():
+        out.append(f"      {tid}   ({info.get('n_hits', 0)} hit(s))")
+        for h in info.get("sample") or []:
+            snip = str(h.get("snippet", "")).replace("\n", " ")[:90]
+            out.append(f"        {h.get('tool')}: …{snip}…")
+    out.append("!" * LINE_WIDTH)
+    return out
 
 
 def _render_cell(cell: dict) -> list[str]:
@@ -318,6 +352,7 @@ def _render_artifacts(run_dir: Path) -> list[str]:
         ("summary (txt)",       f"{rd}/summary.txt"),
         ("trials (jsonl)",      f"{rd}/trials.jsonl"),
         ("per-trial dirs",      f"{rd}/trials/"),
+        ("per-trial audit",     f"{rd}/trials/<id>/audit.txt  (+ audit.html)"),
         ("three-vector plot",   f"{rd}/parallel_coords.png"),
         ("k-dependence plot",   f"{rd}/k_sweep.png"),
         ("per-stage k plot",    f"{rd}/per_stage_k.png"),
