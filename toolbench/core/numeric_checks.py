@@ -11,8 +11,9 @@ since a stage passes only when every check in its list passes.
 
 Currently registered:
 
-- `peak_position`: scans every `.npy` in the sandbox, asks whether
-  each expected scan-point mass has a histogram peak within tolerance.
+- `peak_position`: scans every numeric array in the sandbox (any of
+  .npy/.csv/.tsv/.dat/.txt/.json), asks whether each expected scan-point
+  mass has a histogram peak within tolerance.
   Catches three failure modes the existence-only check misses:
     (a) fake plot from synthetic data — no `.npy` to peak.
     (b) wrong-pairing reconstruction — peaks at the wrong masses.
@@ -71,8 +72,8 @@ def check_peak_position(sandbox: Path, params: dict) -> tuple[bool, str]:
     arrays = _collect_mass_arrays(sandbox, np, min_events)
     if not arrays:
         return False, (
-            f"peak_position: no .npy with ≥{min_events} finite float events "
-            f"(scanned {len(list(sandbox.rglob('*.npy')))} files)"
+            f"peak_position: no numeric array (.npy/.csv/.tsv/.dat/.txt/.json) "
+            f"with ≥{min_events} finite float values found"
         )
 
     found: list[tuple[float, str, float, int]] = []
@@ -118,28 +119,27 @@ def check_peak_position(sandbox: Path, params: dict) -> tuple[bool, str]:
 
 def _collect_mass_arrays(sandbox: Path, np, min_events: int
                          ) -> list[tuple[str, "np.ndarray"]]:
-    """Load every .npy as 1-D finite float, drop the empties.
+    """Load candidate mass arrays from every supported numeric format
+    (.npy / .csv / .tsv / .dat / .txt / .json), as 1-D finite floats, and
+    drop those below `min_events`. Tabular/multi-field files contribute one
+    candidate per column/field, so a mass column survives even when it sits
+    beside event-id or weight columns.
 
-    Returns list of (relative_path_str, array) tuples sorted with
-    smaller arrays last, so the search prefers larger-statistics files.
+    Returns list of (relative_path_str, array) tuples sorted with smaller
+    arrays last, so the search prefers larger-statistics files.
     """
+    from .content_checks import _extract_float_arrays, _TABULAR_EXTS
+
     out: list[tuple[str, "np.ndarray"]] = []
-    for p in sandbox.rglob("*.npy"):
-        try:
-            arr = np.load(p, allow_pickle=False)
-        except Exception:
-            continue
-        if arr.dtype.kind != "f":
-            continue
-        arr = np.asarray(arr).ravel()
-        arr = arr[np.isfinite(arr)]
-        if len(arr) < min_events:
-            continue
-        try:
-            rel = str(p.relative_to(sandbox))
-        except ValueError:
-            rel = p.name
-        out.append((rel, arr))
+    for ext in (".npy",) + _TABULAR_EXTS + (".json",):
+        for p in sandbox.rglob(f"*{ext}"):
+            try:
+                rel = str(p.relative_to(sandbox))
+            except ValueError:
+                rel = p.name
+            for arr in _extract_float_arrays(p, np):
+                if len(arr) >= min_events:
+                    out.append((rel, arr))
     out.sort(key=lambda x: -len(x[1]))
     return out
 
