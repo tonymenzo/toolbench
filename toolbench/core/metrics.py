@@ -60,6 +60,21 @@ PRICING_TABLE: dict[tuple[str, str], tuple[float, float, float | None]] = {
     ("google",    "gemini-2.0-flash"):  (0.075, 0.30,  None),
 }
 
+# API-equivalent prices for models run through a flat-rate subscription.
+# These are informational estimates, not charges, so they are intentionally
+# separate from PRICING_TABLE and never count against BudgetManager.
+SUBSCRIPTION_API_EQUIVALENT_PRICING: dict[tuple[str, str], dict[str, float | int | str]] = {
+    ("openai", "gpt-5.5"): {
+        "input": 5.00,
+        "cached_input": 0.50,
+        "output": 30.00,
+        "long_context_threshold": 272_000,
+        "long_input_multiplier": 2.0,
+        "long_output_multiplier": 1.5,
+        "source": "https://developers.openai.com/api/docs/models/gpt-5.5",
+    },
+}
+
 
 def cost_usd(provider: str, model: str,
              input_tokens: int = 0, output_tokens: int = 0,
@@ -73,6 +88,48 @@ def cost_usd(provider: str, model: str,
     if cache_rate is not None and cache_read_tokens:
         cost += cache_read_tokens * cache_rate / 1e6
     return cost
+
+
+def subscription_api_equivalent_cost(
+    model: str,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    initial_input_tokens: int = 0,
+) -> dict[str, object] | None:
+    """Estimate API-equivalent cost for an OpenAI subscription run.
+
+    The returned amount is a counterfactual based on token use, not an
+    observed charge. ``initial_input_tokens`` identifies sessions known to
+    exceed a model's long-context pricing threshold.
+    """
+    pricing = SUBSCRIPTION_API_EQUIVALENT_PRICING.get(("openai", model))
+    if pricing is None:
+        return None
+    threshold = int(pricing["long_context_threshold"])
+    long_context = initial_input_tokens > threshold
+    in_mult = float(pricing["long_input_multiplier"]) if long_context else 1.0
+    out_mult = float(pricing["long_output_multiplier"]) if long_context else 1.0
+    estimate = (
+        input_tokens * float(pricing["input"]) * in_mult
+        + cache_read_tokens * float(pricing["cached_input"]) * in_mult
+        + output_tokens * float(pricing["output"]) * out_mult
+    ) / 1e6
+    return {
+        "usd": estimate,
+        "basis": "api_equivalent_estimate",
+        "actual_billing": "subscription",
+        "model": model,
+        "rates_usd_per_million_tokens": {
+            "input": float(pricing["input"]),
+            "cached_input": float(pricing["cached_input"]),
+            "output": float(pricing["output"]),
+        },
+        "long_context_threshold": threshold,
+        "long_context_pricing_applied": long_context,
+        "source": pricing["source"],
+    }
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:

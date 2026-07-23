@@ -34,7 +34,7 @@ Layout (plain ASCII, paper-appendix safe):
 
       COST
       ----
-          cost      <$X.XX>     [(local via litellm) when zero]
+          cost      <$X.XX> | n/a
           tokens    <in> in / <out> out / <cache_read> cache_read
           wall      <Xm Ys>
 

@@ -146,6 +146,7 @@ class CellSummary(TypedDict):
     pass_at_1:                float
     metric_correlations:      MetricCorrelations
     mean_cost_usd:            float | None
+    mean_estimated_api_equivalent_cost_usd: float | None
     mean_wall_clock_s:        float
     stages:                   dict[str, float]
     failure_modes:            dict[str, int]
@@ -1121,6 +1122,30 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
         print(f"  INTEGRITY: {len(integrity_flagged)} trial(s) quarantined "
               f"(reached the answer key): {', '.join(integrity_flagged)}")
 
+    # Subscription CLIs report tokens but no per-run API charge. Attach an
+    # explicitly counterfactual API-equivalent estimate without feeding it to
+    # the real-spend budget tracker.
+    from toolbench.core.metrics import subscription_api_equivalent_cost
+    _provider_by_harness = {
+        h.get("id"): (h.get("provider") or {}).get("name")
+        for h in (manifest.get("harnesses") or []) if isinstance(h, dict)
+    }
+    _estimate_basis = None
+    for row in all_trial_records:
+        if _provider_by_harness.get(row.get("harness")) != "subscription":
+            continue
+        estimate = subscription_api_equivalent_cost(
+            str(row.get("model", "")),
+            input_tokens=int(row.get("input_tokens", 0) or 0),
+            output_tokens=int(row.get("output_tokens", 0) or 0),
+            cache_read_tokens=int(row.get("cache_read_tokens", 0) or 0),
+            initial_input_tokens=int(row.get("initial_input_tokens", 0) or 0),
+        )
+        if estimate is not None:
+            row["estimated_api_equivalent_cost_usd"] = estimate["usd"]
+            _estimate_basis = {key: value for key, value in estimate.items()
+                               if key != "usd"}
+
     pass_threshold = (manifest.get("reach_weights") or {}).get("pass_threshold")
     summary = aggregate(all_trial_records, k=k,
                         stage_order=stage_order, stage_weights=stage_weights,
@@ -1130,6 +1155,14 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
     summary["pass_criterion"] = manifest.get("pass_criterion", "all_stages")
     summary["reach_weights"] = manifest.get("reach_weights", {})
     summary["total_spent_usd"] = round(budget.spent, 6)
+    _estimates = [
+        float(r["estimated_api_equivalent_cost_usd"])
+        for r in all_trial_records
+        if isinstance(r.get("estimated_api_equivalent_cost_usd"), (int, float))
+    ]
+    if _estimates:
+        summary["estimated_api_equivalent_cost_usd"] = round(sum(_estimates), 6)
+        summary["estimated_cost_basis"] = _estimate_basis
     summary["aborted_by_budget"] = aborted
     summary["integrity"] = {
         "scanned": len(all_trial_records),
@@ -1236,6 +1269,10 @@ def aggregate(trials: list[dict], k: int,
         n = len(rows)
         c = sum(passes)
         costs = [r["cost_usd"] for r in rows if r["cost_usd"] is not None]
+        estimated_costs = [
+            r["estimated_api_equivalent_cost_usd"] for r in rows
+            if r.get("estimated_api_equivalent_cost_usd") is not None
+        ]
         wallclocks = [r["wall_clock_s"] for r in rows]
         # Token usage per cell: mean initial (starting context size) and mean
         # cumulative input/output/cache across trials. 0 when a runtime doesn't
@@ -1295,6 +1332,9 @@ def aggregate(trials: list[dict], k: int,
             },
             "k": k,
             "mean_cost_usd": round(mean(costs), 6) if costs else None,
+            "mean_estimated_api_equivalent_cost_usd": (
+                round(mean(estimated_costs), 6) if estimated_costs else None
+            ),
             "mean_wall_clock_s": round(mean(wallclocks), 2) if wallclocks else 0.0,
             "mean_tokens": tokens_mean,
             "stages": _stages_breakdown(rows),
