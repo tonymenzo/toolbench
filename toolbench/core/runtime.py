@@ -82,7 +82,7 @@ def registered_runtimes() -> list[str]:
 def build_agent(runtime_name: str, *, llm, tools, tool_hooks,
                 system_prompt: str, display_hook=None,
                 sandbox_dir: str | None = None, harness=None,
-                loadout=None) -> Any:
+                loadout=None, protected_paths=None) -> Any:
     """Construct the agent for `runtime_name` via its registered factory.
 
     `sandbox_dir` / `harness` / `loadout` are additive context for
@@ -103,7 +103,8 @@ def build_agent(runtime_name: str, *, llm, tools, tool_hooks,
         )
     return factory(llm=llm, tools=tools, tool_hooks=tool_hooks,
                    system_prompt=system_prompt, display_hook=display_hook,
-                   sandbox_dir=sandbox_dir, harness=harness, loadout=loadout)
+                   sandbox_dir=sandbox_dir, harness=harness, loadout=loadout,
+                   protected_paths=protected_paths)
 
 
 def check_runtime_version(runtime_name: str, spec: str | None, *,
@@ -244,13 +245,23 @@ class ClaudeCodeAgent:
                  model: str | None = None, profile: str | None = _CLAUDE_CODE_PROFILE,
                  project_root: str | None = None,
                  call_timeout_s: int = _CLAUDE_CODE_CALL_TIMEOUT_S,
-                 traj_hook=None):
+                 traj_hook=None, env=None, cli_opts=None, protected_paths=None):
         self.system_prompt = system_prompt or ""
         self.sandbox_dir = Path(sandbox_dir).resolve()
+        # Absolute paths the Bash sandbox must deny-read (e.g. the benchmark's
+        # ground-truth tree). Only used when cli_opts["sandbox"] is on.
+        self.protected_paths = [str(Path(os.path.expanduser(
+            os.path.expandvars(p))).resolve()) for p in (protected_paths or [])]
         self.model = model or "claude-haiku-4-5"
         self.profile = profile
         self.project_root = project_root
         self.call_timeout_s = int(call_timeout_s)
+        self.harness_env = dict(env or {})
+        # Curated pass-through of harness `runtime.*` keys to optional `claude`
+        # CLI flags (effort, fallback_model, max_budget_usd, add_dir,
+        # disallowed_tools). Correctness-critical flags (output-format,
+        # permission-mode, allowedTools, mcp-config) stay hardcoded in run().
+        self.cli_opts = dict(cli_opts or {})
         # The runner's TrajectoryHook: firing before_call/after_call on it per
         # streamed tool call records the call onto the trajectory (-> transcript
         # + artifact dump) AND emits the orchestral-format line to console.log,
@@ -258,6 +269,14 @@ class ClaudeCodeAgent:
         self.traj_hook = traj_hook
         self.session_id: str | None = None
         self._mcp_config_path: Path | None = None
+        # Token usage accumulated from `claude`'s stream-json result events
+        # across all turns of this session (task loop + any nudges/UX turn).
+        # `initial_input` is the first request's total input; the rest are
+        # cumulative. Read by the runner's `_extract_usage`.
+        self.token_usage = {"initial_input": 0, "input": 0, "output": 0,
+                            "cache_read": 0, "cache_creation": 0,
+                            "cost": None, "model": self.model}
+        self._usage_seen = False
 
     # -- MCP wiring -----------------------------------------------------
     def _ensure_mcp_config(self) -> Path | None:
@@ -325,18 +344,96 @@ class ClaudeCodeAgent:
             # are spot-checkable for fabrication. Requires --verbose in -p mode.
             "--output-format", "stream-json", "--verbose",
         ]
+        # Curated, harness-configurable flags (from runtime.*). Optional; each
+        # is appended only when set. The correctness-critical flags above are
+        # never overridable here.
+        opts = self.cli_opts
+        if opts.get("disallowed_tools"):
+            cmd += ["--disallowedTools",
+                    ",".join(str(t) for t in opts["disallowed_tools"])]
+        if opts.get("effort"):
+            cmd += ["--effort", str(opts["effort"])]
+        if opts.get("fallback_model"):
+            cmd += ["--fallback-model", str(opts["fallback_model"])]
+        if opts.get("max_budget_usd") is not None:
+            cmd += ["--max-budget-usd", str(opts["max_budget_usd"])]
+        if opts.get("add_dir"):
+            cmd += ["--add-dir", *[str(d) for d in opts["add_dir"]]]
+        # Bash filesystem sandbox (macOS Seatbelt). Confines the Bash tool's
+        # WRITES to the sandbox and DENIES READS of the benchmark's ground truth
+        # (self.protected_paths) plus any harness-declared extra paths. Applies
+        # only to Bash + children; MCP tools run outside it and are unaffected.
+        if opts.get("sandbox"):
+            deny = list(dict.fromkeys(
+                self.protected_paths
+                + [str(Path(os.path.expanduser(os.path.expandvars(p))).resolve())
+                   for p in (opts.get("sandbox_deny") or [])]))
+            settings = {
+                "sandbox": {
+                    "enabled": True,
+                    "filesystem": {
+                        # The sandbox + the system temp dirs (so OpenMP/numpy
+                        # temp files that default to /tmp don't fail). None of
+                        # these hold anything integrity-sensitive; the answer
+                        # key is blocked via denyRead below.
+                        "allowWrite": [str(self.sandbox_dir), "/tmp",
+                                       "/private/tmp"],
+                        "denyRead": deny,
+                    },
+                    "autoAllowBashIfSandboxed": True,
+                    "failIfUnavailable": True,
+                    "allowUnsandboxedCommands": False,
+                }
+            }
+            cmd += ["--settings", json.dumps(settings)]
         if self.session_id:
             cmd += ["--resume", self.session_id]
+        elif self.traj_hook is not None:
+            # First turn of the session: record what we appended via
+            # --append-system-prompt, so every run's log proves the harness's
+            # system prompt actually reached the agent (length + first line).
+            sp = self.system_prompt or ""
+            first = sp.splitlines()[0] if sp else "(empty)"
+            self.traj_hook.write_to_log(
+                f"\n--- append-system-prompt: {len(sp)} chars | "
+                f"first line: {first[:100]} ---")
 
         # Subscription auth via the logged-in CLI: never inject an API key.
         env = dict(os.environ)
         env.pop("ANTHROPIC_API_KEY", None)
+        # Harness-declared env (runtime.env), e.g. ENABLE_TOOL_SEARCH=false to
+        # load all MCP tools eagerly rather than behind tool-search deferral.
+        _apply_harness_env(env, self.harness_env)
         # Client-side MCP timeouts as a backstop; the SERVER-side wall that
         # actually fires is `toolbase serve --call-timeout` (set in the
         # .mcp.json above). Keep them consistent so neither side cuts a long
         # but legitimate Pythia/Delphes call short.
         env.setdefault("MCP_TOOL_TIMEOUT", str(self.call_timeout_s * 1000))
         env.setdefault("MCP_TIMEOUT", str(60 * 1000))
+        # Under the Bash sandbox, writes are confined to the sandbox; point
+        # tools that cache to $HOME (matplotlib fontlist, etc.) at a writable
+        # spot inside it so plotting doesn't fail on a denied cache write.
+        if opts.get("sandbox"):
+            # matplotlib caches its fontlist to $HOME (write-denied under the
+            # sandbox); point it at the sandbox so plotting works. NOTE: this
+            # env is inherited by the MCP toolbase child too, but MPLCONFIGDIR
+            # is inert for the tools. We deliberately do NOT redirect TMPDIR
+            # here: that would change where the heavy MCP tools (MG5/Delphes)
+            # write temp and thus influence the actual run. Bash's own temp
+            # needs are covered by allowing the system temp dirs to WRITE (see
+            # the sandbox settings), which leaves the tools' env untouched.
+            env.setdefault("MPLCONFIGDIR", str(self.sandbox_dir / ".mplconfig"))
+            # fontconfig / other libs cache into $HOME/.cache (write-denied under
+            # the sandbox), which surfaced as "Fontconfig error: no writable
+            # cache directories" during plotting. Redirect the XDG cache home
+            # into the sandbox so those caches have somewhere to go. Like
+            # MPLCONFIGDIR this is a cache redirect and inert for the MCP tools.
+            _cache = self.sandbox_dir / ".cache"
+            try:
+                _cache.mkdir(exist_ok=True)
+            except Exception:
+                pass
+            env.setdefault("XDG_CACHE_HOME", str(_cache))
 
         import threading
         proc = subprocess.Popen(
@@ -415,7 +512,31 @@ class ClaudeCodeAgent:
                 f"claude_code runtime: claude reported is_error ({subtype}): "
                 f"{result_data.get('result') or result_data.get('api_error_status')}"
             )
+        self._accumulate_usage(result_data)
         return _ClaudeCodeResponse(result_data.get("result") or "")
+
+    def _accumulate_usage(self, result_data: dict) -> None:
+        """Fold this turn's token usage from `claude`'s result event into
+        `self.token_usage`. The `usage.iterations` list carries per-message
+        counts (fresh `input_tokens` plus cached reads/writes); summing them
+        gives the tokens actually processed. The first iteration's total input
+        is recorded as `initial_input` (the starting context size)."""
+        u = (result_data or {}).get("usage") or {}
+        its = u.get("iterations") or ([u] if u else [])
+        for it in its:
+            i_in = int(it.get("input_tokens", 0) or 0)
+            i_cr = int(it.get("cache_read_input_tokens", 0) or 0)
+            i_cc = int(it.get("cache_creation_input_tokens", 0) or 0)
+            self.token_usage["input"] += i_in
+            self.token_usage["cache_read"] += i_cr
+            self.token_usage["cache_creation"] += i_cc
+            self.token_usage["output"] += int(it.get("output_tokens", 0) or 0)
+            if not self._usage_seen:
+                self.token_usage["initial_input"] = i_in + i_cr + i_cc
+                self._usage_seen = True
+        cost = result_data.get("total_cost_usd")
+        if cost is not None:
+            self.token_usage["cost"] = (self.token_usage["cost"] or 0.0) + float(cost)
 
 
 def _cli_runtime_common(harness, loadout, tool_hooks):
@@ -424,15 +545,20 @@ def _cli_runtime_common(harness, loadout, tool_hooks):
     profile from the loadout, and the runner's TrajectoryHook (records tool
     calls onto the trajectory + emits the styled console line; other hooks like
     TruncateOutputHook are ignored — they only matter for an in-process model).
-    Returns (model, call_timeout_s, profile, project_root, traj_hook)."""
+    Also reads `runtime.env` (a mapping of environment variables to set on the
+    CLI subprocess, e.g. `ENABLE_TOOL_SEARCH: "false"` to load all MCP tools
+    eagerly instead of behind Claude Code's tool-search deferral).
+    Returns (model, call_timeout_s, profile, project_root, traj_hook, env)."""
     model = None
     call_timeout_s = _CLAUDE_CODE_CALL_TIMEOUT_S
+    env_overrides: dict = {}
     if harness is not None:
         provider = getattr(harness, "provider", None) or {}
         model = provider.get("model")
         runtime_cfg = getattr(harness, "runtime", None) or {}
         if runtime_cfg.get("call_timeout_s") is not None:
             call_timeout_s = int(runtime_cfg["call_timeout_s"])
+        env_overrides = dict(runtime_cfg.get("env") or {})
     profile, project_root = _loadout_toolbase_profile(loadout)
     traj_hook = None
     for h in (tool_hooks or []):
@@ -440,11 +566,21 @@ def _cli_runtime_common(harness, loadout, tool_hooks):
                 and hasattr(h, "trajectory")):
             traj_hook = h
             break
-    return model, call_timeout_s, profile, project_root, traj_hook
+    return model, call_timeout_s, profile, project_root, traj_hook, env_overrides
+
+
+def _apply_harness_env(env: dict, overrides) -> None:
+    """Merge harness-declared `runtime.env` vars into the subprocess env,
+    authoritatively (the committed harness config defines the run environment,
+    for reproducibility). YAML booleans are lowercased so that
+    `ENABLE_TOOL_SEARCH: false` becomes the string 'false', not 'False'."""
+    for k, v in (overrides or {}).items():
+        env[str(k)] = "true" if v is True else "false" if v is False else str(v)
 
 
 def _claude_code_factory(*, system_prompt, sandbox_dir=None, harness=None,
-                         loadout=None, tool_hooks=None, **_):
+                         loadout=None, tool_hooks=None, protected_paths=None,
+                         **_):
     # `**_` absorbs the orchestral-shaped kwargs (llm, tools, display_hook)
     # this runtime doesn't use. We DO use tool_hooks: the runner's
     # TrajectoryHook is in there, and firing it per streamed tool call gives
@@ -453,13 +589,45 @@ def _claude_code_factory(*, system_prompt, sandbox_dir=None, harness=None,
         raise ValueError(
             "claude_code runtime requires sandbox_dir (the runner passes it)."
         )
-    model, call_timeout_s, profile, project_root, traj_hook = _cli_runtime_common(
-        harness, loadout, tool_hooks)
+    model, call_timeout_s, profile, project_root, traj_hook, env_overrides = \
+        _cli_runtime_common(harness, loadout, tool_hooks)
     return ClaudeCodeAgent(
         system_prompt=system_prompt, sandbox_dir=sandbox_dir, model=model,
         profile=profile, project_root=project_root,
-        call_timeout_s=call_timeout_s, traj_hook=traj_hook,
+        call_timeout_s=call_timeout_s, traj_hook=traj_hook, env=env_overrides,
+        cli_opts=_claude_code_cli_opts(harness), protected_paths=protected_paths,
     )
+
+
+def _claude_code_cli_opts(harness) -> dict:
+    """Curated map of harness `runtime.*` keys to optional `claude` CLI flags.
+    Only these keys are honored (unknown runtime keys are silently ignored, as
+    ever); correctness-critical flags stay hardcoded in ClaudeCodeAgent.run().
+      runtime.disallowed_tools (list) -> --disallowedTools
+      runtime.effort (str)            -> --effort  (low|medium|high|xhigh|max)
+      runtime.fallback_model (str)    -> --fallback-model
+      runtime.max_budget_usd (number) -> --max-budget-usd
+      runtime.add_dir (list)          -> --add-dir
+    """
+    rc = (getattr(harness, "runtime", None) or {}) if harness is not None else {}
+    opts: dict = {}
+    if rc.get("disallowed_tools"):
+        opts["disallowed_tools"] = list(rc["disallowed_tools"])
+    for key in ("effort", "fallback_model"):
+        if rc.get(key):
+            opts[key] = rc[key]
+    if rc.get("max_budget_usd") is not None:
+        opts["max_budget_usd"] = rc["max_budget_usd"]
+    if rc.get("add_dir"):
+        opts["add_dir"] = list(rc["add_dir"])
+    # Bash filesystem sandbox (macOS Seatbelt): confine the Bash tool's WRITES
+    # to the sandbox and deny READS of the benchmark's ground truth + any extra
+    # declared paths. Applies only to Bash + its children; MCP tools are
+    # unaffected. Off unless the harness opts in.
+    if rc.get("sandbox"):
+        opts["sandbox"] = True
+        opts["sandbox_deny"] = [str(p) for p in (rc.get("sandbox_deny") or [])]
+    return opts
 
 
 register_runtime("claude_code", _claude_code_factory)
@@ -496,7 +664,9 @@ class CodexAgent:
                  model: str | None = None, profile: str | None = None,
                  project_root: str | None = None,
                  call_timeout_s: int = _CLAUDE_CODE_CALL_TIMEOUT_S,
-                 sandbox_mode: str = _CODEX_DEFAULT_SANDBOX, traj_hook=None):
+                 sandbox_mode: str = _CODEX_DEFAULT_SANDBOX, traj_hook=None,
+                 env=None, reasoning_effort: str | None = None,
+                 protected_paths=None):
         self.system_prompt = system_prompt or ""
         self.sandbox_dir = Path(sandbox_dir).resolve()
         self.model = model            # None => codex uses its configured default
@@ -504,8 +674,16 @@ class CodexAgent:
         self.project_root = project_root
         self.call_timeout_s = int(call_timeout_s)
         self.sandbox_mode = sandbox_mode or _CODEX_DEFAULT_SANDBOX
+        self.harness_env = dict(env or {})
+        self.reasoning_effort = reasoning_effort
+        self.protected_paths = [str(Path(p).resolve())
+                                for p in (protected_paths or []) if p]
         self.traj_hook = traj_hook
         self.thread_id: str | None = None
+        self.token_usage = {"initial_input": 0, "input": 0, "output": 0,
+                            "cache_read": 0, "cache_creation": 0,
+                            "cost": None, "model": self.model}
+        self._usage_seen = False
 
     # -- MCP wiring -----------------------------------------------------
     def _mcp_config_args(self) -> list[str]:
@@ -524,7 +702,100 @@ class CodexAgent:
                   + json.dumps("toolbase"),
             "-c", f"mcp_servers.{_TOOLBASE_MCP_SERVER}.args="
                   + json.dumps(serve_args),
+            # `codex exec` is noninteractive. Without a server-level default,
+            # discovered MCP calls end as "user cancelled MCP tool call" even
+            # though the tool was registered correctly.
+            "-c", f"mcp_servers.{_TOOLBASE_MCP_SERVER}."
+                  "default_tools_approval_mode=" + json.dumps("approve"),
         ]
+
+    def _build_command(self, codex: str, prompt: str) -> list[str]:
+        """Build a first-turn or resume command using only supported flags.
+
+        User config is deliberately ignored: benchmark conditions must not
+        inherit personal MCP servers, hooks, model defaults, or reasoning
+        settings. Authentication still comes from CODEX_HOME.
+        """
+        if self.thread_id:
+            cmd = [codex, "exec", "resume", self.thread_id,
+                   "--json", "--skip-git-repo-check", "--ignore-user-config"]
+        else:
+            cmd = [codex, "exec", "--json", "--skip-git-repo-check",
+                   "--ignore-user-config", "-C", str(self.sandbox_dir)]
+            if not self.protected_paths:
+                cmd += ["-s", self.sandbox_mode]
+        cmd += self._protected_path_config_args()
+        if self.model:
+            cmd += ["-m", self.model]
+        if self.reasoning_effort:
+            cmd += ["-c", "model_reasoning_effort="
+                    + json.dumps(self.reasoning_effort)]
+        cmd += self._mcp_config_args()
+        cmd += [prompt]
+        return cmd
+
+    def _protected_path_config_args(self) -> list[str]:
+        """Build a native Codex permission profile with unreadable paths.
+
+        Codex 0.145+ can express path-level read denial in the same filesystem
+        policy that implements workspace/read-only confinement. This avoids
+        nesting macOS Seatbelt around the Codex driver (which breaks both
+        ``sandbox_apply`` and TLS trust services) and lets Codex select its
+        platform backend on macOS, Linux, and Windows.
+        """
+        if not self.protected_paths:
+            return []
+        profile = "toolbench_benchmark"
+        args = ["-c", "default_permissions=" + json.dumps(profile)]
+        builtins = {
+            "workspace-write": ":workspace",
+            "read-only": ":read-only",
+        }
+        parent = builtins.get(self.sandbox_mode)
+        if parent:
+            args += ["-c", f"permissions.{profile}.extends="
+                     + json.dumps(parent)]
+            filesystem_entries = []
+        else:
+            # A custom root write grant retains danger-full-access filesystem
+            # semantics while the explicit benchmark paths remain unreadable.
+            args += [
+                "-c", f"permissions.{profile}.network.enabled=true",
+            ]
+            filesystem_entries = [(str(Path("/")), "write")]
+        filesystem_entries.extend((path, "deny")
+                                  for path in self.protected_paths)
+        # Dynamic absolute paths cannot safely be placed in a dotted `-c` key:
+        # Codex's override parser preserves the quote marks as part of the path.
+        # An inline TOML table keeps each path as a proper string key.
+        table = "{" + ",".join(
+            f"{json.dumps(path)}={json.dumps(access)}"
+            for path, access in filesystem_entries) + "}"
+        args += ["-c", f"permissions.{profile}.filesystem={table}"]
+        return args
+
+    def _protect_ground_truth_reads(self, cmd: list[str]) -> list[str]:
+        """Compatibility shim: protection is now part of ``cmd`` itself."""
+        return cmd
+
+    def _accumulate_usage(self, usage: dict) -> None:
+        """Fold one Codex ``turn.completed.usage`` payload into totals."""
+        if not usage:
+            return
+        total_in = int(usage.get("input_tokens", 0) or 0)
+        cached = int(usage.get("cached_input_tokens",
+                               usage.get("cache_read_input_tokens", 0)) or 0)
+        cache_write = int(usage.get("cache_write_input_tokens",
+                                    usage.get("cache_creation_input_tokens", 0)) or 0)
+        fresh = max(0, total_in - cached)
+        output = int(usage.get("output_tokens", 0) or 0)
+        self.token_usage["input"] += fresh
+        self.token_usage["cache_read"] += cached
+        self.token_usage["cache_creation"] += cache_write
+        self.token_usage["output"] += output
+        if not self._usage_seen:
+            self.token_usage["initial_input"] = total_in
+            self._usage_seen = True
 
     # -- event parsing --------------------------------------------------
     @staticmethod
@@ -543,12 +814,24 @@ class CodexAgent:
             is_err = exit_code not in (0, None)
             return name, {"command": cmd}, str(item.get("aggregated_output") or ""), is_err
         if itype == "mcp_tool_call":
+            # Keep `<toolkit>__<tool>` intact in the authoritative transcript;
+            # reports may additionally normalize it for cross-backend plots.
             name = (item.get("tool") or item.get("name")
-                    or item.get("server") or "mcp_tool").split("__")[-1]
+                    or item.get("server") or "mcp_tool")
             args = item.get("arguments") or item.get("input") or {}
             out = (item.get("result") or item.get("output")
                    or item.get("aggregated_output") or "")
             return name, args, str(out), bool(item.get("is_error") or item.get("error"))
+        if itype == "file_change":
+            out = (item.get("output") or item.get("result")
+                   or item.get("error") or "")
+            failed = (item.get("status") in
+                      {"failed", "error", "cancelled"}
+                      or bool(item.get("is_error") or item.get("error")))
+            changes = item.get("changes") or item.get("input") or []
+            # Trajectory consumers expect a mapping (script extraction calls
+            # ``args.get``). Codex represents file changes as a list.
+            return ("file_change", {"changes": changes}, str(out), failed)
         # Unknown tool-shaped item: record it rather than drop it silently.
         name = (item.get("tool") or item.get("name") or itype)
         return str(name), (item.get("input") or {}), str(item.get("output") or ""), False
@@ -565,21 +848,16 @@ class CodexAgent:
         # the first prompt. On resume the thread already carries it.
         if self.thread_id:
             prompt = message
-            cmd = [codex, "exec", "resume", self.thread_id]
         else:
             prompt = (f"{self.system_prompt}\n\n---\n\n{message}"
                       if self.system_prompt else message)
-            cmd = [codex, "exec"]
-        cmd += ["--json", "--skip-git-repo-check",
-                "-s", self.sandbox_mode, "-C", str(self.sandbox_dir)]
-        if self.model:
-            cmd += ["-m", self.model]
-        cmd += self._mcp_config_args()
-        cmd += [prompt]
+        cmd = self._protect_ground_truth_reads(
+            self._build_command(codex, prompt))
 
         # Subscription auth via the logged-in CLI: never inject an API key.
         env = dict(os.environ)
         env.pop("OPENAI_API_KEY", None)
+        _apply_harness_env(env, self.harness_env)
 
         import threading
         proc = subprocess.Popen(
@@ -639,6 +917,7 @@ class CodexAgent:
                             pass
                 elif etype == "turn.completed":
                     turn_done = True
+                    self._accumulate_usage(ev.get("usage") or {})
             proc.wait(timeout=60)
         finally:
             killer.cancel()
@@ -647,6 +926,11 @@ class CodexAgent:
             except Exception:
                 pass
 
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"codex runtime: codex exited {proc.returncode}. "
+                f"stderr:\n{stderr[:2000]}"
+            )
         if result_text is None and not turn_done:
             raise RuntimeError(
                 "codex runtime: stream ended with no agent message "
@@ -656,22 +940,34 @@ class CodexAgent:
 
 
 def _codex_factory(*, system_prompt, sandbox_dir=None, harness=None,
-                   loadout=None, tool_hooks=None, **_):
+                   loadout=None, tool_hooks=None, llm=None,
+                   protected_paths=None, **_):
     if not sandbox_dir:
         raise ValueError(
             "codex runtime requires sandbox_dir (the runner passes it)."
         )
-    model, call_timeout_s, profile, project_root, traj_hook = _cli_runtime_common(
-        harness, loadout, tool_hooks)
+    model, call_timeout_s, profile, project_root, traj_hook, env_overrides = \
+        _cli_runtime_common(harness, loadout, tool_hooks)
     sandbox_mode = _CODEX_DEFAULT_SANDBOX
     if harness is not None:
         runtime_cfg = getattr(harness, "runtime", None) or {}
         if runtime_cfg.get("sandbox"):
             sandbox_mode = str(runtime_cfg["sandbox"])
+    # The run matrix's --models value is carried by SubscriptionLLM. It must
+    # override a harness default; otherwise differently-labelled cells silently
+    # execute the same Codex model.
+    requested_model = getattr(llm, "model", None)
+    if requested_model:
+        model = requested_model
+    reasoning_effort = None
+    if harness is not None:
+        reasoning_effort = (getattr(harness, "runtime", None) or {}).get(
+            "reasoning_effort")
     return CodexAgent(
         system_prompt=system_prompt, sandbox_dir=sandbox_dir, model=model,
         profile=profile, project_root=project_root, call_timeout_s=call_timeout_s,
-        sandbox_mode=sandbox_mode, traj_hook=traj_hook,
+        sandbox_mode=sandbox_mode, traj_hook=traj_hook, env=env_overrides,
+        reasoning_effort=reasoning_effort, protected_paths=protected_paths,
     )
 
 

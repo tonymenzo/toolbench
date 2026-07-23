@@ -342,6 +342,7 @@ def render_footer(*, end_t: float, reach: float, passed: bool,
         cost_line = f"{cost_line:<32}{cost_note}"
 
     tk = tokens or {}
+    tok_init = int(tk.get("initial_input", 0))
     tok_in = int(tk.get("input", 0))
     tok_out = int(tk.get("output", 0))
     tok_cache = int(tk.get("cache_read", 0))
@@ -365,7 +366,8 @@ def render_footer(*, end_t: float, reach: float, passed: bool,
         "  ----",
         "",
         cost_line,
-        f"      tokens    {tok_in:,} in  /  {tok_out:,} out  /  {tok_cache:,} cache_read",
+        f"      tokens    {tok_init:,} initial in  /  {tok_in:,} in  /  "
+        f"{tok_out:,} out  /  {tok_cache:,} cache_read",
         f"      wall      {fmt_wall(wall_s)}",
     ]
 

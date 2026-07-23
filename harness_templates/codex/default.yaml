@@ -1,0 +1,18 @@
+# codex runtime: drives `codex exec --json` under a ChatGPT subscription.
+# See README.md in this directory for every key the runtime reads.
+name: codex/default
+runtime:
+  name: codex
+  call_timeout_s: 3600              # per-MCP-call timeout; raise for long tool calls
+  sandbox: workspace-write          # read-only | workspace-write | danger-full-access
+  reasoning_effort: medium          # explicit; never inherit the user's Codex config
+provider:
+  name: subscription                # credential-free placeholder llm (never called)
+  # The model always comes from toolbench run --models.
+core:
+  builtin: true                     # use Codex's own core tools
+loop:
+  max_format_retries: 2
+  continue_nudges: 0
+  max_rate_limit_retries: 3
+  max_transient_retries: 4

@@ -284,6 +284,41 @@ def _pkg_version(name: str) -> str:
         return "unknown"
 
 
+def _runtime_version(runtime_name: str | None) -> str | None:
+    """Best-effort version of a harness runtime's agent, recorded per run so a
+    result is traceable to the exact CLI/library that produced it. For CLI
+    runtimes this shells out to the tool; for the in-process orchestral runtime
+    it is the installed library version.
+
+    NB: for CLI runtimes that serve tools from an isolated toolkit env (via
+    toolbase), this is the DRIVER version — the served toolkit reports its own
+    versions separately in the resolution block."""
+    import subprocess
+    name = (runtime_name or "").lower()
+    cli = {"claude_code": "claude", "codex": "codex"}.get(name)
+    if cli is not None:
+        try:
+            out = subprocess.run([cli, "--version"], capture_output=True,
+                                 text=True, timeout=15)
+            return (out.stdout or out.stderr).strip() or None
+        except Exception:
+            return None
+    if name == "orchestral":
+        return f"orchestral-ai {_pkg_version('orchestral-ai')}"
+    return None
+
+
+def _runtime_version_label(runtime_name: str, raw: str | None) -> str | None:
+    """Compact a CLI's version output without dropping the version number."""
+    if not raw:
+        return None
+    parts = str(raw).split()
+    if runtime_name == "codex" and len(parts) >= 2 and parts[0] == "codex-cli":
+        return parts[1]
+    # Claude prints `2.1.218 (Claude Code)`; the first token is the version.
+    return parts[0]
+
+
 def _print_resolution(report: dict) -> None:
     """Print a W8-style resolution preview for one (harness, loadout)."""
     ctools = report.get("core", {}).get("tools", [])
@@ -412,6 +447,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         if litellm_pricing:
             print(f"  Pricing snapshot: {len(litellm_pricing)} models from litellm proxy.")
 
+    # Per-runtime agent version (claude/codex CLI, or orchestral lib), captured
+    # once at launch so every run records the exact driver that produced it.
+    runtime_versions = {}
+    for h in harnesses:
+        rn = (h.runtime or {}).get("name")
+        if rn and rn not in runtime_versions:
+            runtime_versions[rn] = _runtime_version(rn)
+
     manifest = {
         "run_id": run_id,
         "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -446,6 +489,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "dry_run": args.dry_run,
         "versions": {"orchestral-ai": _pkg_version("orchestral-ai"),
                      "toolbench": _pkg_version("toolbench")},
+        "runtime_versions": runtime_versions,
         "rubric_total_weight": round(benchmark.rubric.total_weight(), 4),
         "pass_criterion": ("all_stages"
                            if benchmark.rubric.pass_threshold is None
@@ -478,6 +522,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"  Benchmark: {bench_name} | Harness(es): {h_ids} | Models: {models}")
         print(f"  Loadouts: {l_names} | Variants: {v_names} | "
               f"n: {args.n} | budget: ${args.max_cost_usd}")
+        rt_str = " | ".join(f"{rn} {ver or 'unknown'}"
+                            for rn, ver in runtime_versions.items())
+        print(f"  Versions: orchestral-ai {_pkg_version('orchestral-ai')} | "
+              f"toolbench {_pkg_version('toolbench')}"
+              + (f" | {rt_str}" if rt_str else ""))
 
         # Resolution preview (W8): surface tool wiring up front, including any
         # toolbase/mcp connection error, before constructing agents. The
@@ -885,6 +934,7 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
                   f"{type(e).__name__}: {e}", file=sys.stderr)
             return {**base_row, "ok": False, "score": 0.0,
                     "stages": {}, "wall_clock_s": 0.0,
+                    "initial_input_tokens": 0,
                     "input_tokens": 0, "output_tokens": 0,
                     "cache_read_tokens": 0, "cost_usd": 0.0,
                     "tool_calls": 0,
@@ -906,9 +956,11 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
                 for s in result.grade.stage_grades
                 if _stage_distance(s)[1]},
             "wall_clock_s": round(result.wall_clock_s, 2),
+            "initial_input_tokens": result.trajectory.tokens.get("initial_input", 0),
             "input_tokens": result.trajectory.tokens.get("input", 0),
             "output_tokens": result.trajectory.tokens.get("output", 0),
             "cache_read_tokens": result.trajectory.tokens.get("cache_read", 0),
+            "cache_creation_tokens": result.trajectory.tokens.get("cache_creation", 0),
             "cost_usd": round(result.cost_usd, 6) if result.cost_usd is not None else None,
             "tool_calls": len(result.trajectory.tool_calls),
             "tool_errors": sum(1 for tc in result.trajectory.tool_calls
@@ -1024,6 +1076,19 @@ def aggregate(trials: list[dict], k: int,
         c = sum(passes)
         costs = [r["cost_usd"] for r in rows if r["cost_usd"] is not None]
         wallclocks = [r["wall_clock_s"] for r in rows]
+        # Token usage per cell: mean initial (starting context size) and mean
+        # cumulative input/output/cache across trials. 0 when a runtime doesn't
+        # report usage.
+        def _tok_mean(key):
+            vals = [int(r.get(key, 0) or 0) for r in rows]
+            return round(mean(vals)) if vals else 0
+        tokens_mean = {
+            "initial_input": _tok_mean("initial_input_tokens"),
+            "input": _tok_mean("input_tokens"),
+            "output": _tok_mean("output_tokens"),
+            "cache_read": _tok_mean("cache_read_tokens"),
+            "cache_creation": _tok_mean("cache_creation_tokens"),
+        }
         score_mean, score_lo, score_hi = bootstrap_ci(scores)
         _sm = _stage_matrix(rows, stage_order, stage_weights)
         stage_matrix, w, gating = _sm.matrix, _sm.weights, _sm.gating
@@ -1070,6 +1135,7 @@ def aggregate(trials: list[dict], k: int,
             "k": k,
             "mean_cost_usd": round(mean(costs), 6) if costs else None,
             "mean_wall_clock_s": round(mean(wallclocks), 2) if wallclocks else 0.0,
+            "mean_tokens": tokens_mean,
             "stages": _stages_breakdown(rows),
             "stage_display": _stages_continuous_breakdown(rows),
             "failure_modes": _count_failures(rows),

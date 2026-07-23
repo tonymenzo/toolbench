@@ -640,6 +640,23 @@ class TrialRunner:
              (when `--provider litellm`), keyed on `configured_model`.
           3. The static `metrics.PRICING_TABLE` (last-resort fallback).
         """
+        # CLI runtimes (claude_code, codex) drive an external agent process and
+        # accumulate their own usage from its output; use it directly rather
+        # than scanning for orchestral Response objects (which they never make).
+        direct = getattr(agent, "token_usage", None)
+        if direct is not None:
+            trajectory.tokens.update({
+                "initial_input": int(direct.get("initial_input", 0) or 0),
+                "input": int(direct.get("input", 0) or 0),
+                "output": int(direct.get("output", 0) or 0),
+                "cache_read": int(direct.get("cache_read", 0) or 0),
+                "cache_creation": int(direct.get("cache_creation", 0) or 0),
+            })
+            if direct.get("model"):
+                trajectory.resolved_model = direct["model"]
+            if direct.get("cost") is not None:
+                trajectory.cost_usd = round(float(direct["cost"]), 6)
+            return
         try:
             from orchestral.llm.base.response import Response
             tot_in = tot_out = tot_cache_read = tot_cache_creation = 0
