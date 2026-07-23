@@ -76,6 +76,7 @@ def _render_run_header(summary: dict, manifest: dict) -> list[str]:
     n_cells  = len(summary.get("cells", []))
     budget   = manifest.get("max_cost_usd")
     spent    = summary.get("total_spent_usd", 0.0)
+    estimated = summary.get("estimated_api_equivalent_cost_usd")
     start    = manifest.get("created_at", "")
     wall     = sum(c.get("mean_wall_clock_s", 0.0) * c.get("n", 0)
                    for c in summary.get("cells", []))
@@ -85,8 +86,10 @@ def _render_run_header(summary: dict, manifest: dict) -> list[str]:
         if isinstance(budget, (int, float))
         else f"${spent:.2f} spent"
     )
-    if spent == 0.0:
-        budget_line += "  (local via litellm)"
+    if isinstance(estimated, (int, float)):
+        budget_line += (
+            f"   ${estimated:.2f} API-equivalent (estimated, subscription)"
+        )
 
     lines = [
         f"  run_id     {run_id}",
@@ -281,6 +284,7 @@ def _render_failures(failures: dict) -> list[str]:
 def _render_cost(cell: dict) -> list[str]:
     n = max(int(cell.get("n", 0)), 1)
     mean_cost = cell.get("mean_cost_usd")
+    mean_estimated = cell.get("mean_estimated_api_equivalent_cost_usd")
     mean_wall = cell.get("mean_wall_clock_s", 0.0)
     total_cost = (mean_cost * n) if isinstance(mean_cost, (int, float)) else None
     total_wall = mean_wall * n
@@ -290,8 +294,12 @@ def _render_cost(cell: dict) -> list[str]:
         if total_cost is not None and mean_cost is not None
         else "      cost      n/a"
     )
-    if total_cost == 0.0:
-        cost_line = f"{cost_line}      (local)"
+    if mean_cost is None and isinstance(mean_estimated, (int, float)):
+        total_estimated = mean_estimated * n
+        cost_line = (
+            f"      cost      ${total_estimated:.2f} total       "
+            f"${mean_estimated:.2f} / trial  (estimated, subscription)"
+        )
     lines = [
         *_section_title("COST"),
         "",

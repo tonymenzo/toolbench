@@ -236,8 +236,17 @@ def _build_llm_judge(spec: JudgeSpec, benchmark_dir, harnesses):
     else:
         llm = _CliJudgeLLM(runtime, model,
                            timeout_s=int(h.runtime.get("call_timeout_s", 300)))
+    # `artifact_chars` bounds how much of each answer/reference file the judge
+    # reads. The 8000-char default suits small answer files; benchmarks whose
+    # deliverable or reference is larger (a long yield scan, a multi-field truth
+    # file) raise it so the judge sees the whole reference rather than a head
+    # slice. Omitted -> LLMJudge's own default applies.
+    extra = {}
+    if "artifact_chars" in spec.params:
+        extra["artifact_chars"] = int(spec.params["artifact_chars"])
     return LLMJudge(
         llm=llm, model=model, harness_id=spec.harness,
         benchmark_dir=benchmark_dir,
         max_tokens=int(spec.params.get("max_tokens", 1024)),
+        **extra,
     )

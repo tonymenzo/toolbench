@@ -9,6 +9,7 @@ from toolbench.core.metrics import (  # noqa: E402
     reach_bar_k, bootstrap_ci, cost_usd, mean,
     pass_at_k, pass_caret_k, pearson_corr_matrix,
     per_trial_reach, reach_at_k, reach_caret_k,
+    subscription_api_equivalent_cost,
 )
 
 
@@ -216,6 +217,33 @@ class TestCostUsd(unittest.TestCase):
                      1_000_000, 1_000_000, 1_000_000),
             6.10,
         )
+
+    def test_gpt55_subscription_api_equivalent_base_rates(self):
+        estimate = subscription_api_equivalent_cost(
+            "gpt-5.5",
+            input_tokens=1_000_000,
+            cache_read_tokens=1_000_000,
+            output_tokens=1_000_000,
+            initial_input_tokens=100_000,
+        )
+        self.assertIsNotNone(estimate)
+        self.assertAlmostEqual(estimate["usd"], 35.5)
+        self.assertFalse(estimate["long_context_pricing_applied"])
+        self.assertEqual(estimate["actual_billing"], "subscription")
+
+    def test_gpt55_subscription_api_equivalent_long_context_rates(self):
+        estimate = subscription_api_equivalent_cost(
+            "gpt-5.5",
+            input_tokens=1_000_000,
+            cache_read_tokens=1_000_000,
+            output_tokens=1_000_000,
+            initial_input_tokens=272_001,
+        )
+        self.assertAlmostEqual(estimate["usd"], 56.0)
+        self.assertTrue(estimate["long_context_pricing_applied"])
+
+    def test_unknown_subscription_model_is_not_guessed(self):
+        self.assertIsNone(subscription_api_equivalent_cost("future-model"))
 
 
 class TestBootstrap(unittest.TestCase):
