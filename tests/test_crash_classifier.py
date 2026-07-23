@@ -155,6 +155,49 @@ class TestRateLimitCrash(unittest.TestCase):
         self.assertEqual(mode, MODEL_FORMAT_CRASH)
 
 
+class TestProviderRejectedToolCall(unittest.TestCase):
+    """Groq validates tool-call arguments server-side.
+
+    The same gpt-oss defect that raises JSONDecodeError on the OpenAI
+    route comes back as HTTP 400 `tool_use_failed` here, with no
+    JSONDecodeError anywhere — it must still be MODEL_FORMAT_CRASH so
+    the runner spends its format retries on it.
+    """
+
+    # Pasted verbatim from a real groq/gpt-oss-120b symbolic trial.
+    _BODY = (
+        "Error code: 400 - {'error': {'message': 'Failed to parse tool call "
+        "arguments as JSON', 'type': 'invalid_request_error', 'code': "
+        "'tool_use_failed', 'failed_generation': '{\"name\": \"runpython\", "
+        "\"arguments\": import sympy as sp\\n\\n# define symbols\\n'}}"
+    )
+    _TRACEBACK = (
+        'File "/.../orchestral/llm/groq/client.py", line 77, in call_api\n'
+        "    api_response = self.client.chat.completions.create(**call_params)\n"
+        'File "/.../groq/_base_client.py", line 1071, in request\n'
+    )
+
+    def _exc(self):
+        # Stand in for groq.BadRequestError without importing the SDK.
+        return type("BadRequestError", (Exception,), {})(self._BODY)
+
+    def test_classified_as_format_crash(self):
+        mode, _ = classify_crash(self._exc(), self._TRACEBACK)
+        self.assertEqual(mode, MODEL_FORMAT_CRASH)
+
+    def test_reason_surfaces_the_offending_generation(self):
+        _, reason = classify_crash(self._exc(), self._TRACEBACK)
+        self.assertIn("malformed tool-call JSON", reason)
+        self.assertIn("runpython", reason)
+
+    def test_unrelated_400_is_not_a_format_crash(self):
+        exc = type("BadRequestError", (Exception,), {})(
+            "Error code: 400 - {'error': {'message': 'unsupported parameter', "
+            "'type': 'invalid_request_error'}}")
+        mode, _ = classify_crash(exc, self._TRACEBACK)
+        self.assertEqual(mode, AGENT_CRASH)
+
+
 class TestGenericCrash(unittest.TestCase):
     def test_attribute_error(self):
         exc = AttributeError("'NoneType' object has no attribute 'foo'")

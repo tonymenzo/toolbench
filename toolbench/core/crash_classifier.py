@@ -9,11 +9,21 @@ trial footer / summary readable instead of dumping a Python traceback.
 
 Currently classified:
 
-- `MODEL_FORMAT_CRASH`: `JSONDecodeError` from inside Orchestral's
-  OpenAI tool-call parser. gpt-oss (and similar function-calling
-  models) periodically emit malformed JSON in their tool-call
-  arguments — empty strings, truncated objects, leaked Harmony
-  channel markers. Frequency scales with context length.
+- `MODEL_FORMAT_CRASH`: the model emitted malformed JSON in its
+  tool-call arguments — empty strings, truncated objects, leaked
+  Harmony channel markers, or raw source code where a JSON string
+  belongs. gpt-oss (and similar function-calling models) do this
+  periodically; frequency scales with context length. The same model
+  defect surfaces in two shapes depending on who validates first:
+    * client-side — the bad arguments reach Orchestral, whose OpenAI
+      parser does a bare `json.loads` and raises `JSONDecodeError`;
+    * provider-side — Groq validates tool-call arguments server-side
+      and rejects the generation with HTTP 400 `tool_use_failed`,
+      echoing the offending text in `failed_generation`, so the client
+      raises a provider `BadRequestError` and no `JSONDecodeError` is
+      ever constructed.
+  Both are the same nondeterministic model failure and both are worth
+  the runner's `max_format_retries` resume, so both map here.
 - `CONTEXT_LENGTH_EXCEEDED`: the conversation outgrew the model's
   context window and the provider rejected the request (HTTP 400 /
   `context_length_exceeded`). Long, tool-heavy trials hit this — the
@@ -205,20 +215,52 @@ def _context_length_reason(exc: BaseException, traceback_str: str) -> str:
     return "context window exceeded (provider rejected request: too many input tokens)"
 
 
+# Provider-side rejection of the model's own tool-call arguments. Groq
+# validates them server-side and returns HTTP 400 with code
+# `tool_use_failed`, so the client raises a provider BadRequestError and
+# no JSONDecodeError is ever constructed. Matched on the error body's
+# own markers rather than the exception type, so we don't have to import
+# (or depend on the presence of) each provider's SDK.
+_TOOL_USE_FAILED_MARKERS = (
+    "tool_use_failed",
+    "failed to parse tool call arguments as json",
+    "failed_generation",
+)
+
+
 def _is_tool_call_json_decode_error(exc: BaseException,
                                     traceback_str: str) -> bool:
-    """True if this is the gpt-oss tool-call argument decode failure."""
+    """True if the model emitted malformed tool-call arguments.
+
+    Covers both shapes of the same defect: the client-side
+    `JSONDecodeError` out of Orchestral's OpenAI parser, and a
+    provider-side 400 that rejects the generation before we ever see it
+    (Groq's `tool_use_failed`).
+    """
+    if isinstance(exc, json.JSONDecodeError):
+        return any(marker in traceback_str for marker in (
+            "parse_tool_calls",
+            "openai/parsers",
+            "orchestral/llm/openai",
+        ))
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(marker in text for marker in _TOOL_USE_FAILED_MARKERS)
+
+
+def _format_tool_call_decode_reason(exc: BaseException) -> str:
+    """Compact reason line for a malformed tool-call-arguments failure."""
     if not isinstance(exc, json.JSONDecodeError):
-        return False
-    return any(marker in traceback_str for marker in (
-        "parse_tool_calls",
-        "openai/parsers",
-        "orchestral/llm/openai",
-    ))
-
-
-def _format_tool_call_decode_reason(exc: json.JSONDecodeError) -> str:
-    """Compact reason line for a tool-call JSON decode failure."""
+        # Provider-side rejection: the body carries the offending text in
+        # `failed_generation`, which is far more useful than the status line.
+        body = str(exc).replace("\n", " ").replace("\r", " ")
+        marker = "failed_generation"
+        if marker in body:
+            body = body[body.index(marker) + len(marker):].lstrip("':\" ")
+        snippet = body[:_RAW_SNIPPET_LEN]
+        if len(body) > _RAW_SNIPPET_LEN:
+            snippet += "…"
+        return ("model emitted malformed tool-call JSON; provider rejected "
+                f"the generation: raw={snippet!r}")
     raw = exc.doc or ""
     snippet = raw[:_RAW_SNIPPET_LEN].replace("\n", " ").replace("\r", " ")
     if len(raw) > _RAW_SNIPPET_LEN:
