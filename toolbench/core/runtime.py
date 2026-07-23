@@ -821,7 +821,19 @@ class CodexAgent:
             args = item.get("arguments") or item.get("input") or {}
             out = (item.get("result") or item.get("output")
                    or item.get("aggregated_output") or "")
-            return name, args, str(out), bool(item.get("is_error") or item.get("error"))
+            out_text = str(out)
+            # Some MCP servers return application errors as successful
+            # transport payloads (e.g. content text "Input validation error")
+            # while Codex leaves `error` null. Preserve that distinction in the
+            # trajectory instead of reporting a healthy domain-tool call.
+            lowered = out_text.lower()
+            payload_error = any(marker in lowered for marker in (
+                "input validation error", "execution error",
+                "'iserror': true", '"iserror": true',
+            ))
+            return (name, args, out_text,
+                    bool(item.get("is_error") or item.get("error")
+                         or payload_error))
         if itype == "file_change":
             out = (item.get("output") or item.get("result")
                    or item.get("error") or "")

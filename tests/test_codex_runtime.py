@@ -78,6 +78,18 @@ def test_mcp_tool_view_keeps_qualified_tool_name():
     assert view[3] is False
 
 
+def test_mcp_tool_view_detects_application_error_payload():
+    view = CodexAgent._tool_view({
+        "type": "mcp_tool_call", "server": "toolbase",
+        "tool": "heptapod__PythiaFromRunCard",
+        "arguments": {"cmnd_path": "card.cmnd"},
+        "result": {"content": [{"type": "text",
+                               "text": "Input validation error: required"}]},
+        "error": None, "status": "completed",
+    })
+    assert view[3] is True
+
+
 def test_file_change_failure_is_an_error():
     view = CodexAgent._tool_view({
         "type": "file_change", "status": "failed",
