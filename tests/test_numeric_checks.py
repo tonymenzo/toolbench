@@ -59,10 +59,11 @@ class TestPeakPosition(_TmpSandbox):
         self.assertIn("peaks within", msg)
 
     def test_no_npy_files_at_all(self):
-        # Faked-PDF case: no .npy → can't measure any peak → fail.
+        # Faked-PDF case: no numeric array in any format → can't measure any
+        # peak → fail.
         ok, msg = run_numeric_check(self.SPEC, self.sandbox)
         self.assertFalse(ok)
-        self.assertIn("no .npy", msg)
+        self.assertIn("no numeric array", msg)
 
     def test_wrong_pairing_peaks_shifted_low(self):
         # gpt-oss-120b n000/n002 pattern: peaks at ~700/~1100/~1500
@@ -92,9 +93,9 @@ class TestPeakPosition(_TmpSandbox):
             self.write_npy(f"analysis/lq_{m}.npy", self._good(m, n=20))
         ok, msg = run_numeric_check(self.SPEC, self.sandbox)
         self.assertFalse(ok)
-        # Could be "no .npy with ≥50" or "missing peaks" depending on
-        # which path matches first; either is acceptable.
-        self.assertTrue("no .npy" in msg or "missing peaks" in msg, msg)
+        # Could be "no numeric array with ≥50" or "missing peaks" depending
+        # on which path matches first; either is acceptable.
+        self.assertTrue("no numeric array" in msg or "missing peaks" in msg, msg)
 
     def test_real_reconstruction_with_combinatoric_pile_up(self):
         # n003/n004/n008 pattern: a real signal peak at the right mass

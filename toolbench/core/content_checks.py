@@ -149,6 +149,163 @@ def check_npy_array(sandbox: Path, params: dict) -> tuple[bool, str]:
     )
 
 
+# --------------------------------------------------------------------------
+# Format-agnostic helpers.
+#
+# The strict checks above key on a specific tool's output structure (a .npy
+# array, a .jsonl with named keys). By-hand agents (core_only / recipes) that
+# drive the software themselves save the *same physics* in whatever format
+# they reach for — one value per line, a CSV column, a JSON list, a HepMC
+# stream. The helpers below discover the deliverable by content across the
+# common numeric/record formats so a stage is credited on the physics, not
+# on matching the tool's schema.
+# --------------------------------------------------------------------------
+
+# Extensions we treat as plain-text tabular numeric dumps.
+_TABULAR_EXTS = (".csv", ".tsv", ".dat", ".txt")
+# Per-event record-stream extensions (a HepMC event line starts with "E ").
+_HEPMC_EXTS = (".hepmc", ".hepmc2", ".hepmc3")
+
+
+def _json_numeric_arrays(obj, np) -> list:
+    """Pull 1-D numeric arrays out of a decoded JSON object: a bare list of
+    numbers, each numeric field of a list-of-records, each numeric column of
+    a list-of-rows, or each numeric list value of a dict."""
+    out = []
+    if isinstance(obj, list) and obj:
+        if all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in obj):
+            out.append(np.asarray(obj, dtype=float))
+        elif all(isinstance(x, dict) for x in obj):
+            keys = set().union(*[d.keys() for d in obj])
+            for k in keys:
+                vals = [d.get(k) for d in obj]
+                if all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                       for v in vals):
+                    out.append(np.asarray(vals, dtype=float))
+        elif all(isinstance(x, (list, tuple)) for x in obj):
+            try:
+                arr = np.asarray(obj, dtype=float)
+                if arr.ndim == 2:
+                    out.extend(arr[:, c] for c in range(arr.shape[1]))
+            except Exception:
+                pass
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            if (isinstance(v, list) and v
+                    and all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                            for x in v)):
+                out.append(np.asarray(v, dtype=float))
+    return out
+
+
+def _extract_float_arrays(path: Path, np) -> list:
+    """Return candidate 1-D finite-float arrays from a numeric file of any
+    supported format (.npy / .csv / .tsv / .dat / .txt / .json). For tabular
+    or multi-field data every column/field is returned as its own candidate,
+    so a downstream peak/shape test can pick whichever one is the physics.
+    Returns [] for files that don't parse as numeric."""
+    suf = path.suffix.lower()
+    raw: list = []
+    try:
+        if suf == ".npy":
+            arr = np.load(path, allow_pickle=False)
+            if arr.dtype.kind in "fiu":
+                raw.append(arr)
+        elif suf in _TABULAR_EXTS:
+            delim = "," if suf == ".csv" else ("\t" if suf == ".tsv" else None)
+            data = np.genfromtxt(path, delimiter=delim, comments="#", dtype=float)
+            data = np.asarray(data, dtype=float)
+            if data.ndim == 1:
+                raw.append(data)
+            elif data.ndim == 2 and data.size:
+                raw.extend(data[:, c] for c in range(data.shape[1]))
+        elif suf == ".json":
+            raw = _json_numeric_arrays(json.loads(path.read_text()), np)
+    except Exception:
+        return []
+
+    cleaned = []
+    for a in raw:
+        a = np.asarray(a, dtype=float).ravel()
+        a = a[np.isfinite(a)]
+        if a.size:
+            cleaned.append(a)
+    return cleaned
+
+
+def check_numeric_array(sandbox: Path, params: dict) -> tuple[bool, str]:
+    """Format-agnostic numeric-array presence check: any file (of any
+    supported format) yielding a 1-D numeric array with ≥ min_len finite
+    values. This is the format-free counterpart of `npy_array` — it credits
+    "the agent produced a mass/observable array" regardless of whether it
+    was saved as .npy, a CSV column, a text dump, or a JSON list.
+
+    Params:
+        min_len: minimum number of finite values. Default 1.
+        dtype_kind: retained for rubric back-compat; ignored (all formats
+            are coerced to float).
+        under_subpath: restrict the search to this subtree.
+    """
+    import numpy as np
+    min_len = int(params.get("min_len", 1))
+    root = _scope(sandbox, params)
+    scanned = 0
+    for ext in (".npy",) + _TABULAR_EXTS + (".json",):
+        for p in root.rglob(f"*{ext}"):
+            scanned += 1
+            for arr in _extract_float_arrays(p, np):
+                if arr.size >= min_len:
+                    return True, (f"{p.relative_to(sandbox)}: "
+                                  f"{arr.size} finite values")
+    return False, (f"no numeric array with ≥{min_len} finite values in any "
+                   f"format (.npy/.csv/.tsv/.dat/.txt/.json; scanned {scanned})")
+
+
+def check_record_stream(sandbox: Path, params: dict) -> tuple[bool, str]:
+    """Format-agnostic per-event record-stream check: evidence that a
+    per-event dataset of ≥ min_records records was produced, in any common
+    form — a .jsonl (any schema), a HepMC event stream, or a tabular/array
+    dump with ≥ min_records rows. Format-free counterpart of
+    `jsonl_with_keys`: it credits the showering / clustering stage on the
+    existence of the per-event data, not on the exact keys a tool emits.
+
+    Params:
+        min_records: minimum record count. Default 100.
+        under_subpath: restrict the search to this subtree.
+    """
+    min_records = int(params.get("min_records", 100))
+    root = _scope(sandbox, params)
+
+    for p in root.rglob("*.jsonl"):
+        try:
+            n = sum(1 for ln in open(p, errors="ignore") if ln.strip())
+        except OSError:
+            continue
+        if n >= min_records:
+            return True, f"{p.relative_to(sandbox)}: {n} JSONL records"
+
+    for ext in _HEPMC_EXTS:
+        for p in root.rglob(f"*{ext}"):
+            try:
+                with open(p, errors="ignore") as f:
+                    n = sum(1 for ln in f if ln[:2] in ("E ", "E\t"))
+            except OSError:
+                continue
+            if n >= min_records:
+                return True, f"{p.relative_to(sandbox)}: {n} HepMC events"
+
+    import numpy as np
+    for ext in _TABULAR_EXTS + (".npy", ".json"):
+        for p in root.rglob(f"*{ext}"):
+            arrs = _extract_float_arrays(p, np)
+            if arrs and max(a.size for a in arrs) >= min_records:
+                return True, (f"{p.relative_to(sandbox)}: "
+                              f"≥{min_records} per-event rows")
+
+    return False, (f"no per-event record stream with ≥{min_records} records "
+                   f"(.jsonl / HepMC / tabular)")
+
+
 def check_pdf_nonempty(sandbox: Path, params: dict) -> tuple[bool, str]:
     """Any .pdf of at least min_bytes that starts with the %PDF magic."""
     return check_plot_nonempty(sandbox, dict(params, extensions=["pdf"]))
@@ -229,8 +386,10 @@ def check_plot_nonempty(sandbox: Path, params: dict) -> tuple[bool, str]:
 CONTENT_CHECKS: dict[str, Callable[[Path, dict], tuple[bool, str]]] = {
     "ufo_dir":          check_ufo_dir,
     "lhe_with_events":  check_lhe_with_events,
-    "jsonl_with_keys":  check_jsonl_with_keys,
-    "npy_array":        check_npy_array,
+    "jsonl_with_keys":  check_jsonl_with_keys,   # strict: named keys, .jsonl only
+    "record_stream":    check_record_stream,     # format-free per-event stream
+    "npy_array":        check_npy_array,          # strict: .npy only
+    "numeric_array":    check_numeric_array,      # format-free numeric array
     "pdf_nonempty":     check_pdf_nonempty,    # back-compat alias
     "plot_nonempty":    check_plot_nonempty,   # accepts .pdf or .png
 }
