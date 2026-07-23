@@ -54,7 +54,8 @@ from toolbench.core.metrics import (
 )
 from toolbench.core.runner import TrialRunner
 from toolbench.core.runtime import check_runtime_version, registered_runtimes
-from toolbench.core.store import append_jsonl, read_json, read_jsonl, write_json
+from toolbench.core.store import (append_jsonl, read_json, read_jsonl,
+                                  read_jsonl_gz, write_json)
 from toolbench.core.harness import discover_harnesses
 from toolbench.core.loadout import discover_loadouts
 from toolbench.core.tool_resolver import build_agent_tools, release_sources
@@ -355,6 +356,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     bench_name = benchmark.name
     bench_dir = benchmark.BENCHMARK_DIR
 
+    # Opt-in full-sandbox retention (see runner._cleanup_sandbox). Set as an
+    # env var so the staticmethod cleanup can read it without threading a flag
+    # through every call layer; mirrors ORCHESTRAL_MAX_COMMAND_TIMEOUT.
+    if getattr(args, "keep_sandbox", False):
+        os.environ["TOOLBENCH_KEEP_SANDBOX"] = "1"
+
     # Harness(es) — default from benchmark.yaml's default_harness.
     # Discovery walks the benchmark's search dirs, so an `extends:`
     # overlay sees the parent's harnesses/loadouts and shadows by name.
@@ -515,6 +522,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "continue_nudges": args.continue_nudges,
         "max_rate_limit_retries": args.max_rate_limit_retries,
         "max_transient_retries": args.max_transient_retries,
+        "ux_feedback": args.ux_feedback,
         "parallel": args.parallel,
         "dry_run": args.dry_run,
         "versions": {"orchestral-ai": _pkg_version("orchestral-ai"),
@@ -542,6 +550,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         max_continue_nudges=args.continue_nudges,
         max_rate_limit_retries=args.max_rate_limit_retries,
         max_transient_retries=args.max_transient_retries,
+        ux_feedback=args.ux_feedback,
         llm_judge=llm_judge,
     )
 
@@ -703,6 +712,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         max_continue_nudges=manifest.get("continue_nudges"),
         max_rate_limit_retries=manifest.get("max_rate_limit_retries"),
         max_transient_retries=manifest.get("max_transient_retries"),
+        ux_feedback=manifest.get("ux_feedback"),
+        llm_judge=llm_judge,
     )
 
     print(f"Resume: {args.run_id}")
@@ -1087,6 +1098,33 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
     summary["reach_weights"] = manifest.get("reach_weights", {})
     summary["total_spent_usd"] = round(budget.spent, 6)
     summary["aborted_by_budget"] = aborted
+    # Provenance for the summary header. Show toolbench (always) + the version
+    # of the RUNTIME(S) that actually drove the run: orchestral-ai for
+    # orchestral runs, the CLI version for claude_code / codex runs. Don't list
+    # orchestral-ai on a claude-code run (it isn't used), and vice versa.
+    _pkg_vers = manifest.get("versions") or {}          # {orchestral-ai, toolbench}
+    _rt_vers = manifest.get("runtime_versions") or {}   # {claude_code|codex: ver}
+    _runtimes = {(h.get("runtime") or {}).get("name")
+                 for h in (manifest.get("harnesses") or []) if isinstance(h, dict)}
+    _versions_display = {}
+    if _pkg_vers.get("toolbench"):
+        _versions_display["toolbench"] = _pkg_vers["toolbench"]
+    for _rt in sorted(r for r in _runtimes if r):
+        if _rt == "orchestral" and _pkg_vers.get("orchestral-ai"):
+            _versions_display["orchestral-ai"] = _pkg_vers["orchestral-ai"]
+        elif _rt_vers.get(_rt):
+            label = _runtime_version_label(_rt, _rt_vers[_rt])
+            if label:
+                _versions_display[_rt] = label
+    summary["provenance"] = {
+        "git_sha": manifest.get("git_sha"),
+        "versions": _versions_display,
+        "harnesses": [h.get("id") for h in (manifest.get("harnesses") or [])
+                      if isinstance(h, dict)],
+    }
+    # Per-cell tool usage (per-tool call/error counts + adoption) and blind UX
+    # ratings, read from each trial's transcript / trial.json (run_dir needed).
+    _augment_cells_with_trial_detail(summary, all_trial_records, run_dir)
     write_json(run_dir / "summary.json", summary)
 
     # Auto-render the headline plots. Best-effort: a plotting failure
@@ -1415,6 +1453,129 @@ def _round_corr(corr: list[list[float | None]]) -> list[list[float | None]]:
     ]
 
 
+# Harness core + orchestration tools shared by every loadout; anything else a
+# trial calls is a domain (loadout) tool, so a call to one marks MCP adoption.
+_CORE_TOOL_NAMES = frozenset(name.lower() for name in {
+    "Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS",
+    "TodoWrite", "NotebookEdit", "Task", "TaskCreate", "TaskUpdate",
+    "TaskOutput", "TaskStop", "Monitor", "ExitPlanMode", "WebSearch", "WebFetch",
+    "bash", "command_execution", "file_change", "reasoning", "todo_list",
+})
+
+# Substrings that, in a Bash command that also runs python, mark the domain
+# tools being invoked as a library inside a script (rather than via MCP). Some
+# models never touch the MCP interface and instead import the toolkit, which the
+# MCP-call counts miss entirely — this recovers that as script-based adoption.
+_DOMAIN_TOOL_HINTS = ("MesonDecay", "DecayInVolume", "HarvestForwardFlux",
+                      "PythiaFromRunCard", "tools.llp", "tools.pythia",
+                      ".execute(", "_execute(")
+
+
+def _bash_runs_domain_tool(command: str) -> bool:
+    c = str(command or "")
+    runs_py = ("python" in c.lower() or ".py" in c.lower())
+    return runs_py and any(h in c for h in _DOMAIN_TOOL_HINTS)
+
+
+def _parse_ux_rating(text: str):
+    """Pull a 1-10 integer out of a blind UX rating blurb (e.g. '**Rating: 8**'
+    or '7/10'); None if absent."""
+    if not text:
+        return None
+    m = re.search(r"\b([1-9]|10)\s*/\s*10\b", text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"rating[:\s*]*\**\s*\b([1-9]|10)\b", text, re.I)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _augment_cells_with_trial_detail(summary: dict, trials: list[dict],
+                                     run_dir) -> None:
+    """Attach per-cell `tool_usage` (per-tool call/error counts + adoption) and
+    `ux_ratings` to each summary cell, read from every trial's
+    transcript.jsonl.gz (the authoritative tool-call log — the row's tool_calls
+    is None for CLI runtimes) and trial.json. Best-effort: an unreadable trial
+    simply contributes nothing."""
+    from collections import Counter
+    trials_dir = Path(run_dir) / "trials"
+    by_cell: dict[tuple, list[str]] = {}
+    for t in trials:
+        by_cell.setdefault((t.get("model"), t.get("condition")), []).append(
+            t.get("trial_id"))
+
+    detail: dict[tuple, dict] = {}
+    for key, tids in by_cell.items():
+        per_tool: Counter = Counter()
+        per_tool_err: Counter = Counter()
+        adopted_mcp = 0
+        adopted_script = 0
+        ux: list[int] = []
+        for tid in tids:
+            if not tid:
+                continue
+            tdir = trials_dir / tid
+            tp = tdir / "transcript.jsonl.gz"
+            used_mcp = False
+            used_script = False
+            if tp.exists():
+                try:
+                    for r in read_jsonl_gz(tp):
+                        if r.get("type") != "tool_call":
+                            continue
+                        raw_name = str(r.get("name") or "")
+                        name = raw_name.split("__")[-1]
+                        is_mcp = "__" in raw_name
+                        if is_mcp:
+                            per_tool[name] += 1
+                        if not r.get("ok", True):
+                            if is_mcp:
+                                per_tool_err[name] += 1
+                        if is_mcp:
+                            used_mcp = True
+                        elif name.lower() == "bash" and _bash_runs_domain_tool(
+                                (r.get("args") or {}).get("command", "")):
+                            used_script = True
+                except Exception:
+                    pass
+            if used_mcp:
+                adopted_mcp += 1
+            elif used_script:
+                adopted_script += 1
+            tj = tdir / "trial.json"
+            if tj.exists():
+                try:
+                    br = ((read_json(tj).get("ux_feedback") or {})
+                          .get("blind_rating")) or ""
+                    rating = _parse_ux_rating(br)
+                    if rating is not None:
+                        ux.append(rating)
+                except Exception:
+                    pass
+        detail[key] = {
+            "tool_usage": {
+                "per_tool": dict(per_tool.most_common()),
+                "per_tool_errors": dict(per_tool_err),
+                "total_calls": sum(per_tool.values()),
+                "total_errors": sum(per_tool_err.values()),
+                # adoption split by interface: domain tools via the MCP tool
+                # calls vs. imported as a library inside a python script (which
+                # the per-tool MCP counts do not see).
+                "adopted_trials": adopted_mcp + adopted_script,
+                "adopted_mcp": adopted_mcp,
+                "adopted_script": adopted_script,
+                "n_trials": len(tids),
+            },
+            "ux_ratings": ux,
+        }
+    for cell in summary.get("cells", []):
+        d = detail.get((cell.get("model"), cell.get("condition")))
+        if d:
+            cell["tool_usage"] = d["tool_usage"]
+            cell["ux_ratings"] = d["ux_ratings"]
+
+
 def _stage_distance(sg) -> tuple:
     """(distance, distance_label) for a StageGrade, or (None, None).
 
@@ -1607,6 +1768,13 @@ def cli() -> None:
                    "'you haven't finished' nudge this many times. Never fires "
                    "when the deliverable exists (no oracle leakage); recorded "
                    "per trial. Default: from the harness.")
+@click.option("--ux-feedback/--no-ux-feedback", "ux_feedback", default=None,
+              help="Override the harness loop.ux_feedback: after each trial "
+                   "completes, issue one extra UNSCORED turn asking the agent "
+                   "to critique the served tools (usability, confusing params, "
+                   "missing capabilities). Captured to ux_feedback.md + "
+                   "trial.json; never affects the grade. A tool-development "
+                   "aid. Default: from the harness (off unless it opts in).")
 @click.option("--judge", "judge", default=None,
               help="Which judge(s) grade this run: 'rule' (default, "
                    "deterministic) or 'rule+llm'. With 'rule+llm', the RULE "
@@ -1636,6 +1804,11 @@ def cli() -> None:
               help="Print a stylish line per tool call (▸ start, ✓/✗ end). "
                    "Honors NO_COLOR.")
 @click.option("--run-label", "run_label", default=None)
+@click.option("--keep-sandbox", "keep_sandbox", is_flag=True, default=False,
+              help="Do not delete each trial's sandbox after grading. Keeps "
+                   "the full working tree (not just preserved artifacts) — "
+                   "expensive on disk, but useful for auditing by-hand arms "
+                   "whose deliverable may be in a non-preserved format.")
 def _run(**kw) -> int:
     """Run a benchmark across the (harness × loadout × variant × model) grid."""
     return cmd_run(SimpleNamespace(**kw))

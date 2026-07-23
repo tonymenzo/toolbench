@@ -11,6 +11,7 @@ usage from `agent.context`, grades the result with a benchmark-aware
 """
 
 import datetime
+import os
 import shutil
 import sys
 import time
@@ -99,9 +100,103 @@ class TrialResult:
 
 # Hard fallbacks for the orchestral loop knobs, used only when a harness's
 # `loop:` block omits them (and no CLI override is given).
+#   - ux_feedback (bool, default off): issue one post-completion, UNSCORED
+#     turn asking the agent to critique the tools it was given. A tool-
+#     development aid, not a benchmark condition; see `_UX_FEEDBACK_PROMPT`.
 _LOOP_DEFAULTS = {"max_iterations": 150, "max_format_retries": 3,
                   "continue_nudges": 0, "max_rate_limit_retries": 3,
-                  "max_transient_retries": 4}
+                  "max_transient_retries": 4, "ux_feedback": False}
+
+# Post-completion UX-feedback turn. Issued once, AFTER the task loop ends and
+# BEFORE teardown, only when a harness opts in via `loop.ux_feedback: true`.
+# It is UNSCORED: grading reads sandbox files (which a reflection told not to
+# touch leaves unchanged) and the response is captured separately, never
+# overwriting `trajectory.final_response`. Purpose is tool development —
+# surfacing the interface/documentation friction the agent actually hit.
+_UX_FEEDBACK_PROMPT = (
+    "The task is complete and your work has already been recorded. This final "
+    "message is NOT part of the task and will NOT be graded — it is developer "
+    "feedback about the TOOLS you were given.\n\n"
+    "Do not modify, create, or delete any files, and do not resume the task. "
+    "Just reply in markdown with a candid critique of the tools:\n\n"
+    "1. Rate overall tool usability from 1 to 10, where 1 is unusable, 5 is "
+    "usable but with real friction, 8 is smooth with minor nits, and 10 is "
+    "excellent with nothing you would change. Use the full range.\n"
+    "2. What was confusing, underdocumented, or error-prone? Name the "
+    "specific tools, parameters, or error messages involved.\n"
+    "3. Where did a tool's behaviour or output differ from what its "
+    "description led you to expect?\n"
+    "4. Concretely, what would you change about the tool interfaces, "
+    "defaults, or documentation to make the next run smoother?\n"
+    "5. Was there any capability you wished existed as a tool but did not?\n\n"
+    "Be specific and honest; 'no issues' is a fine answer if the tools were "
+    "genuinely smooth."
+)
+
+# Two-turn graded variant. Turn 1 collects an UNBIASED usability rating BEFORE
+# the grade is revealed (so the score can't anchor it); turn 2 reveals the grade
+# and asks for the informed audit + detailed critique.
+_UX_RATING_PROMPT = (
+    "The task is complete and your work is recorded. This is developer feedback "
+    "about the TOOLS you were given, not part of the task. Do not modify files "
+    "or resume the task.\n\n"
+    "Rate the overall usability of the domain tools from 1 to 10 (1 unusable, 5 "
+    "usable with real friction, 8 smooth with minor nits, 10 excellent with "
+    "nothing to change) and give a one-sentence justification. Reply with just "
+    "the rating and justification."
+)
+_UX_CRITIQUE_PROMPT = (
+    "Now give a candid tool critique in markdown:\n"
+    "1. What was confusing, underdocumented, or error-prone? Name the specific "
+    "tools, parameters, or error messages involved.\n"
+    "2. Where did a tool's behaviour or output differ from what its description "
+    "led you to expect?\n"
+    "3. Concretely, what would you change about the tool interfaces, defaults, "
+    "or documentation to make the next run smoother?\n"
+    "4. Was there any capability you wished existed as a tool but did not?\n\n"
+    "Be specific and honest; 'no issues' is a fine answer if the tools were "
+    "genuinely smooth."
+)
+
+
+_UX_EXPERIENCE_PROMPT = (
+    "The task is complete and your work is recorded. This is developer feedback, "
+    "not part of the task. Do not modify files or resume the task.\n\n"
+    "This run had no domain-specific tools, so there is nothing to critique "
+    "there. Just rate your overall experience working this task from 1 to 10 (1 "
+    "painful, 5 workable with real friction, 8 smooth with minor nits, 10 "
+    "excellent) and give a one-sentence justification. Reply with just the "
+    "rating and justification."
+)
+
+
+def _graded_ux_prompt(grade, rubric) -> str:
+    """Prepend the trial's grade (score + per-stage pass/fail) to the UX prompt
+    so the agent can audit its own run before critiquing the tools.
+
+    Deliberately shows ONLY the score and each stage's id/pass-fail/description --
+    NOT the evidence strings, which embed truth-derived ratios and would leak the
+    hidden answer into the transcript. The extra framing asks the agent to
+    attribute each failure to tool friction vs. its own methodology, so the grade
+    informs the critique rather than just biasing the rating."""
+    lines = [f"Score: {grade.score:.2f} / 1.00"]
+    passed = grade.stages or {}
+    for st in getattr(rubric, "stages", []) or []:
+        sid = st.get("id")
+        desc = st.get("description") or st.get("title") or ""
+        mark = "PASS" if passed.get(sid) else "FAIL"
+        lines.append(f"  {sid:<16} {mark}" + (f"  ({desc})" if desc else ""))
+    grade_block = "\n".join(lines)
+    return (
+        "Here is how your submission on THIS run was graded (real feedback, to "
+        "inform your audit):\n\n" + grade_block + "\n\n"
+        "First, audit your run against this result: for each FAILED stage, was "
+        "the failure driven by tool friction or documentation (name the specific "
+        "tool and parameter) or by your own methodology? What single tool or "
+        "documentation change would most likely have prevented it? If knowing "
+        "the grade changes the usability rating you gave earlier, say so.\n\n"
+        + _UX_CRITIQUE_PROMPT
+    )
 
 # Backoff schedule for RATE_LIMITED resumes (seconds per retry; the last
 # entry repeats if a harness allows more retries than entries). Generous
@@ -130,6 +225,7 @@ class TrialRunner:
                  max_continue_nudges: int | None = None,
                  max_rate_limit_retries: int | None = None,
                  max_transient_retries: int | None = None,
+                 ux_feedback: bool | None = None,
                  llm_judge: Judge | None = None):
         self.judge = judge
         # Optional LLM judge run SERIALLY AFTER the authoritative rule grade,
@@ -164,6 +260,10 @@ class TrialRunner:
         self.max_continue_nudges = max_continue_nudges
         self.max_rate_limit_retries = max_rate_limit_retries
         self.max_transient_retries = max_transient_retries
+        # Tri-state opt-in for the post-completion UX-feedback turn: None means
+        # "defer to the harness's loop.ux_feedback" (default off); True/False is
+        # a CLI/explicit override that wins over the harness.
+        self.ux_feedback = ux_feedback
         # Optional snapshot of {model_name: {input, cache_read, output}}
         # captured from the litellm proxy at run start. Used as a cost
         # fallback when the proxy doesn't populate `usage.cost`.
@@ -178,7 +278,10 @@ class TrialRunner:
         nothing would otherwise mislabel the run's conditions silently.
         """
         loop = getattr(harness, "loop", None) or {}
-        unconsumed = sorted(set(loop) - set(_LOOP_DEFAULTS))
+        # Keys read by OTHER layers (the CLI / reporting), not the runner loop,
+        # but legitimately declared under `loop:` — don't flag them as no-ops.
+        _consumed_elsewhere = {"audit_html"}
+        unconsumed = sorted(set(loop) - set(_LOOP_DEFAULTS) - _consumed_elsewhere)
         if unconsumed:
             print(f"warning: harness {harness.id!r}: loop key(s) {unconsumed} "
                   f"are not consumed by the runner and have NO effect. "
@@ -196,6 +299,19 @@ class TrialRunner:
                 out[key] = int(override)
             else:
                 out[key] = int(loop.get(key, _LOOP_DEFAULTS[key]))
+        # ux_feedback knob: false | true | "graded". A CLI override
+        # (--ux-feedback/--no-ux-feedback) can enable/disable the turn but not
+        # switch on the graded variant (that feeds the grade back to the agent,
+        # so it is a deliberate harness-level opt-in). "graded" implies enabled.
+        hv = loop.get("ux_feedback", _LOOP_DEFAULTS["ux_feedback"])
+        graded = str(hv).strip().lower() == "graded"
+        enabled = graded or (hv is True) or \
+            (str(hv).strip().lower() in ("true", "1", "yes", "on"))
+        if self.ux_feedback is not None:
+            enabled = bool(self.ux_feedback)
+            graded = graded and enabled
+        out["ux_feedback"] = enabled
+        out["ux_feedback_graded"] = graded
         return out
 
     def run_trial(self, model_cfg: dict, benchmark: Task, harness: Harness,
@@ -216,6 +332,8 @@ class TrialRunner:
         max_continue_nudges = loop_cfg["continue_nudges"]
         max_rate_limit_retries = loop_cfg["max_rate_limit_retries"]
         max_transient_retries = loop_cfg["max_transient_retries"]
+        ux_feedback_enabled = loop_cfg["ux_feedback"]
+        ux_feedback_graded = loop_cfg["ux_feedback_graded"]
 
         # Per-variant scaffolding: the variant owns the prompts and the
         # sandbox seed (the things that change between difficulty rungs);
@@ -296,6 +414,10 @@ class TrialRunner:
         aborted = False
         agent = None
         last_response = None         # Final Message returned by agent.run().
+        grade = None                 # graded before the UX turn (below) or after
+        ux_rating: str | None = None     # blind usability rating (graded 2-turn: turn 1)
+        ux_feedback: str | None = None   # post-completion tool-UX critique (unscored)
+        ux_error: str | None = None      # UX-turn failure, if any (never fatal)
         crash_exc: BaseException | None = None
         format_retries = 0       # MODEL_FORMAT_CRASH resumes used (serialization)
         transient_retries = 0    # TRANSIENT_API_ERROR backoff resumes used
@@ -441,6 +563,66 @@ class TrialRunner:
                                 "until you have produced it.")
                             continue
                     break  # complete, finished-but-wrong, or no nudge warranted/left
+
+                # Grade NOW, before the optional UX turn, so (a) a graded UX turn
+                # can show the agent its result and (b) a misbehaving UX turn can
+                # never change the score (grading only reads the sandbox, and the
+                # turn is told not to write). Reused as the official grade below.
+                if crash_exc is None:
+                    try:
+                        grade = judge.grade(trajectory, benchmark.rubric,
+                                            str(sandbox_dir))
+                    except Exception as e:
+                        grade = Grade(score=0.0, stages={}, stage_grades=[],
+                                      failure_mode=GRADE_ERROR,
+                                      judge_kind=judge.kind, judge_notes=str(e))
+
+                # Post-completion UX-feedback turn (opt-in, UNSCORED). Runs on
+                # any clean stop — a "finished but wrong" trial still hit the
+                # tools and its friction is worth capturing. Skipped after an
+                # unrecoverable crash. It resumes the same session so the agent
+                # critiques from full context; failure here is swallowed so a
+                # reflection hiccup never sinks an otherwise-good trial. The
+                # response is captured below, NOT written to
+                # trajectory.final_response, so grading and failure-mode
+                # classification see only the task's real final message.
+                if ux_feedback_enabled and crash_exc is None and last_response is not None:
+                    do_graded = (ux_feedback_graded and grade is not None
+                                 and grade.failure_mode != GRADE_ERROR)
+                    ux_iters = min(max_iterations, 30)
+
+                    def _ux_run(prompt, label):
+                        note = f"\n--- UX-feedback turn ({label}) ---"
+                        if self.verbose:
+                            print(note, flush=True)
+                        traj_hook.write_to_log(note)
+                        resp = agent.run(prompt, max_iterations=ux_iters, **llm_kwargs)
+                        text = getattr(resp, "text", "") or str(resp)
+                        traj_hook.write_to_log(f"\n--- UX {label} ---\n"
+                                               + (text or "(empty)"))
+                        return text
+                    try:
+                        if not loadout.sources:
+                            # No domain tools were served (e.g. the core_only
+                            # baseline): there is nothing to critique, so ask
+                            # only for an overall experience rating.
+                            ux_rating = _ux_run(_UX_EXPERIENCE_PROMPT,
+                                                "experience rating (no tools)")
+                        elif do_graded:
+                            # Two turns: (1) blind usability rating BEFORE the
+                            # grade is revealed, then (2) reveal the grade and
+                            # collect the informed audit + critique.
+                            ux_rating = _ux_run(_UX_RATING_PROMPT,
+                                                "blind rating (pre-grade)")
+                            ux_feedback = _ux_run(_graded_ux_prompt(grade, benchmark.rubric),
+                                                  "graded audit + critique")
+                        else:
+                            ux_feedback = _ux_run(_UX_FEEDBACK_PROMPT,
+                                                  "blind critique")
+                    except Exception as e:
+                        ux_error = f"{type(e).__name__}: {e}"
+                        traj_hook.write_to_log(
+                            "\n--- UX-feedback turn failed (ignored) ---\n" + ux_error)
         finally:
             if agent is not None:
                 # Extract usage even on crash: prior Responses still have
@@ -468,17 +650,20 @@ class TrialRunner:
             aborted = True
             error = error or str(e)
 
-        # Always grade against the artifacts on disk — partial work
-        # done before a crash still earns credit on completed stages.
-        try:
-            grade = judge.grade(trajectory, benchmark.rubric, str(sandbox_dir))
-        except Exception as e:
-            grade = Grade(
-                score=0.0, stages={}, stage_grades=[],
-                failure_mode=GRADE_ERROR,
-                judge_kind=judge.kind,
-                judge_notes=str(e),
-            )
+        # Grade against the artifacts on disk — partial work done before a crash
+        # still earns credit on completed stages. Normally already computed above
+        # (before the UX turn); grade here only on paths that skipped it (dry-run,
+        # a crash, or an early error).
+        if grade is None:
+            try:
+                grade = judge.grade(trajectory, benchmark.rubric, str(sandbox_dir))
+            except Exception as e:
+                grade = Grade(
+                    score=0.0, stages={}, stage_grades=[],
+                    failure_mode=GRADE_ERROR,
+                    judge_kind=judge.kind,
+                    judge_notes=str(e),
+                )
 
         # If the agent crashed, override the natural failure_mode so
         # the taxonomy reports the crash, but the score still reflects
@@ -593,6 +778,14 @@ class TrialRunner:
                 "benchmark": benchmark.name,
             },
             "trajectory": trajectory.to_metadata_dict(),
+            # Post-completion tool-UX critique (opt-in, unscored). null when the
+            # harness didn't request it or the turn was skipped/failed.
+            "ux_feedback": (
+                {"blind_rating": ux_rating, "response": ux_feedback,
+                 "error": ux_error}
+                if (ux_rating is not None or ux_feedback is not None
+                    or ux_error is not None) else None
+            ),
             "grade": grade.to_dict(),
             "wall_clock_s": round(wall_clock, 2),
             "cost_usd": trajectory.cost_usd,
@@ -610,6 +803,18 @@ class TrialRunner:
         }
         write_json(trial_dir / "trial.json", full_trial)
 
+        # Standalone copy of the tool-UX feedback for easy reading during tool
+        # development (trial.json also carries it under `ux_feedback`). The blind
+        # pre-grade rating (graded 2-turn mode) is prepended for context.
+        if ux_rating or ux_feedback:
+            parts = []
+            if ux_rating:
+                parts.append("# Blind usability rating (pre-grade)\n\n" + ux_rating)
+            if ux_feedback:
+                parts.append(ux_feedback)
+            (trial_dir / "ux_feedback.md").write_text("\n\n---\n\n".join(parts),
+                                                      encoding="utf-8")
+
         # Full tool-call list lives here; trial.json carries only the
         # metadata summary.
         transcript_records = [
@@ -620,6 +825,15 @@ class TrialRunner:
             transcript_records.append({
                 "type": "assistant",
                 "content": trajectory.final_response,
+            })
+        # The unscored UX-feedback turn trails the task's final message so a
+        # reviewer sees it in order without it masquerading as task output.
+        if ux_rating or ux_feedback or ux_error:
+            transcript_records.append({
+                "type": "ux_feedback",
+                "blind_rating": ux_rating,
+                "content": ux_feedback or "",
+                "error": ux_error,
             })
         write_jsonl_gz(trial_dir / "transcript.jsonl.gz", transcript_records)
 
@@ -887,6 +1101,13 @@ class TrialRunner:
                 except Exception as exc:
                     _warn(f"artifact preserve (root) {name}", exc)
 
+        # Opt-in retention (env-gated, set by `--keep-sandbox`): keep the
+        # full sandbox in place instead of nuking it. Expensive on disk
+        # (MG5 SubProcess dirs are large) but invaluable when debugging a
+        # by-hand arm whose deliverable lives in a non-preserved format.
+        if os.environ.get("TOOLBENCH_KEEP_SANDBOX", "").strip().lower() in (
+                "1", "true", "yes", "on"):
+            return
         shutil.rmtree(sandbox_dir, ignore_errors=True)
 
 

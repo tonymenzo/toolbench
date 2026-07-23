@@ -83,7 +83,7 @@ def _render_run_header(summary: dict, manifest: dict) -> list[str]:
     if spent == 0.0:
         budget_line += "  (local via litellm)"
 
-    return [
+    lines = [
         f"  run_id     {run_id}",
         f"  task       {task:<24}k          {k}   (n per cell)",
         f"  trials     {n_total:<24}cells      {n_cells}",
@@ -91,6 +91,22 @@ def _render_run_header(summary: dict, manifest: dict) -> list[str]:
         f"  start      {start}",
         f"  wall       {fmt_wall(wall)}",
     ]
+    # Provenance: pinned versions + git SHA + harness, so a summary is
+    # self-describing for reproducibility.
+    prov = summary.get("provenance") or {}
+    # `versions` is already the runtime-appropriate set (toolbench + the runtime
+    # that drove the run), built in cli.py — render it as-is.
+    ver_parts = [f"{k} {v}" for k, v in (prov.get("versions") or {}).items()]
+    if ver_parts:
+        lines.append(f"  versions   {'  '.join(ver_parts)}")
+    tail = []
+    if prov.get("git_sha"):
+        tail.append(f"git {str(prov['git_sha'])[:10]}")
+    if prov.get("harnesses"):
+        tail.append(f"harness {', '.join(prov['harnesses'])}")
+    if tail:
+        lines.append(f"  provenance {'   '.join(tail)}")
+    return lines
 
 
 def _render_cell(cell: dict) -> list[str]:
@@ -101,6 +117,14 @@ def _render_cell(cell: dict) -> list[str]:
     lines.extend(_render_three_vector(cell))
     lines.append("")
     lines.extend(_render_stages(cell))
+    trials_block = _render_trials(cell)
+    if trials_block:
+        lines.append("")
+        lines.extend(trials_block)
+    tools_block = _render_tools(cell)
+    if tools_block:
+        lines.append("")
+        lines.extend(tools_block)
     failures = cell.get("failure_modes") or {}
     if failures:
         lines.append("")
@@ -128,6 +152,56 @@ def _render_three_vector(cell: dict) -> list[str]:
     crit = f"reach >= {pt:g}" if isinstance(pt, (int, float)) else "all stages pass"
     out.append("")
     out.append(f"      pass criterion: a trial passes iff {crit}")
+    return out
+
+
+def _render_trials(cell: dict) -> list[str]:
+    """Per-trial spread the cell mean hides: individual reaches, blind UX
+    ratings, and the reliability (retry/nudge) rollup."""
+    scores = cell.get("trial_scores") or []
+    ux = cell.get("ux_ratings") or []
+    ret = cell.get("retries") or {}
+    if not scores and not ux:
+        return []
+    out = [*_section_title("TRIALS"), ""]
+    if scores:
+        sc = "  ".join(f"{s:.2f}" for s in scores)
+        spread = (f"   (min {min(scores):.2f}  max {max(scores):.2f}  "
+                  f"spread {max(scores) - min(scores):.2f})" if len(scores) > 1
+                  else "")
+        out.append(f"      scores     {sc}{spread}")
+    if ux:
+        out.append(f"      UX rating  {'  '.join(str(r) for r in ux)}"
+                   f"        (blind, 1-10)")
+    if any(ret.get(kk) for kk in ("rate_limit", "transient", "nudges")):
+        out.append(f"      retries    rate-limit {ret.get('rate_limit', 0)}   "
+                   f"transient {ret.get('transient', 0)}   "
+                   f"nudges {ret.get('nudges', 0)}")
+    return out
+
+
+def _render_tools(cell: dict) -> list[str]:
+    """Tool adoption + per-tool call/error counts across the cell (from the
+    trial transcripts). Answers 'did the agents drive the pipeline?' at a
+    glance."""
+    tu = cell.get("tool_usage") or {}
+    per = tu.get("per_tool") or {}
+    if not per:
+        return []
+    out = [*_section_title("TOOLS"), ""]
+    n = tu.get("n_trials", cell.get("n", 0))
+    mcp = tu.get("adopted_mcp", tu.get("adopted_trials", 0))
+    scr = tu.get("adopted_script", 0)
+    split = f"  ({mcp} via MCP" + (f", {scr} via script" if scr else "") + ")"
+    out.append(f"      adoption   {tu.get('adopted_trials', 0)}/{n} "
+               f"trials used domain tools{split if (mcp or scr) else ''}")
+    out.append("      MCP calls:")
+    errs = tu.get("per_tool_errors") or {}
+    longest = max((len(k) for k in per), default=0)
+    for name, cnt in per.items():
+        e = errs.get(name, 0)
+        etxt = f"   ({e} err)" if e else ""
+        out.append(f"        {name:<{longest}}  {cnt}{etxt}")
     return out
 
 
@@ -184,13 +258,25 @@ def _render_cost(cell: dict) -> list[str]:
     )
     if total_cost == 0.0:
         cost_line = f"{cost_line}      (local)"
-    return [
+    lines = [
         *_section_title("COST"),
         "",
         cost_line,
         f"      wall      {fmt_wall(total_wall)} total      "
         f"{fmt_wall(mean_wall)} / trial",
     ]
+    tok = cell.get("mean_tokens") or {}
+    if any(tok.get(k) for k in ("initial_input", "input", "output")):
+        # Per-trial means. "initial" is the starting context (system prompt +
+        # tools + task); input/output are cumulative over the agentic run.
+        lines += [
+            f"      tokens    {tok.get('initial_input', 0):,} initial input / trial",
+            f"                {tok.get('input', 0):,} input  /  "
+            f"{tok.get('output', 0):,} output  (cumulative / trial)",
+            f"                {tok.get('cache_read', 0):,} cache read  /  "
+            f"{tok.get('cache_creation', 0):,} cache write  / trial",
+        ]
+    return lines
 
 
 def _render_paired_deltas(deltas: list[dict]) -> list[str]:
