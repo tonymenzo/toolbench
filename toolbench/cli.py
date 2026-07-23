@@ -1607,6 +1607,23 @@ def cli() -> None:
                    "'you haven't finished' nudge this many times. Never fires "
                    "when the deliverable exists (no oracle leakage); recorded "
                    "per trial. Default: from the harness.")
+@click.option("--judge", "judge", default=None,
+              help="Which judge(s) grade this run: 'rule' (default, "
+                   "deterministic) or 'rule+llm'. With 'rule+llm', the RULE "
+                   "grade stays authoritative and an LLM judge runs SERIALLY "
+                   "after it against the finished sandbox, its result attached "
+                   "in alt_grades (never affects the score or failure mode). "
+                   "Overrides the run harness's `judge:` block. 'llm' alone is "
+                   "not offered on a scored run — the headline number must stay "
+                   "deterministic; use `regrade --judge llm` for that.")
+@click.option("--judge-harness", "judge_harness", default=None,
+              help="Harness the JUDGE is called through, e.g. "
+                   "orchestral/anthropic or claude-code/default. May differ "
+                   "from the harness under test — that is what lets a "
+                   "subscription model judge an API model's run and vice versa.")
+@click.option("--judge-model", "judge_model", default=None,
+              help="Model the judge uses. Defaults to the judge harness's own "
+                   "provider.model.")
 @click.option("--parallel", "parallel", type=int, default=1, show_default=True,
               help="Trials in flight at once. Each trial is self-contained "
                    "(own sandbox/agent/LLM client), so this is safe; mind "
