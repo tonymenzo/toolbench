@@ -27,6 +27,10 @@ it in a `.env` at the repo root, which toolbench loads before reading the enviro
 export ANTHROPIC_API_KEY=sk-...
 ```
 
+Not every harness needs a key: the `claude_code` and `codex` harnesses authenticate through
+their logged-in CLI (subscription auth), so they need **no** API key at all. See
+[Harnesses](harnesses.md).
+
 A dry run needs no key, since `--model stub` never calls a provider.
 
 ## Your first run

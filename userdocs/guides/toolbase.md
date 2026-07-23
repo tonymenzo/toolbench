@@ -22,6 +22,14 @@ unions them with the harness core, runs the trial, and tears the subprocesses do
 trial ends. You benchmark the *same curated, version-pinned tools* your agents run in
 production.
 
+!!! note "CLI runtimes serve the profile out-of-process over MCP"
+    The in-process orchestral bridge above is the `orchestral`-runtime path. Under the
+    `claude_code` and `codex` [runtimes](harnesses.md#runtimes) the same `toolbase:`
+    profile is served **out-of-process over MCP** — the runtime spawns a `toolbase serve
+    --profile … --call-timeout …` subprocess (scoped to the trial sandbox) and wires it to
+    the coding-agent CLI, rather than importing tools into this process. The served
+    toolkit still follows the loadout's `toolbase:` source; only the transport differs.
+
 ## Setup
 
 1. **Install a toolkit and activate it into a profile.** toolbench ships a small
@@ -87,6 +95,12 @@ each trial's `trial.json` under `config.tools.sources[].provenance`. Versions fo
 toolbase's own selection — the project-manifest pin when one exists, else the highest
 installed — so a reach delta measured today stays attributable when toolkit versions
 move tomorrow.
+
+Under a CLI runtime this served-toolkit provenance is recorded *separately* from the
+runtime's own driver version: `claude_code` / `codex` also record their CLI version
+under the manifest's `runtime_versions` (see
+[Runtime version capture](harnesses.md#runtime-version-capture)). The toolkit versions
+here describe *what tools served*; `runtime_versions` describes *what drove the agent*.
 
 ## The boundary
 

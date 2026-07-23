@@ -97,6 +97,7 @@ code-running tools is always preserved under `artifacts/scripts/`.
 ```yaml
 rubric:
   type: stagewise                    # only stagewise is supported
+  pass_threshold: null               # null ⇒ all-stages pass; float ⇒ pass iff reach ≥ it
   stages:
     - id: answer_written
       description: output/answer.json exists with required keys
@@ -106,12 +107,20 @@ rubric:
       expected_tool_calls: [add]     # optional, non-graded diagnostic
 ```
 
+| Rubric key       | Type          | Notes                                                       |
+|------------------|---------------|-------------------------------------------------------------|
+| `type`           | str           | Only `stagewise` is supported.                              |
+| `pass_threshold` | float \| null | Rubric-level. `null` (default) ⇒ a trial passes iff every stage passed; a float ⇒ it passes iff its reach ≥ the threshold. A grading-time decision, changeable with `regrade`. |
+| `stages`         | list          | See below.                                                  |
+
 | Stage key            | Type        | Notes                                                  |
 |----------------------|-------------|--------------------------------------------------------|
 | `id`                 | str         | Unique stage id (appears in the per-stage breakdown).  |
 | `description`        | str         | Human label.                                           |
-| `weight`             | float       | Stage weight. Score is the prefix product, normalized. |
+| `weight`             | float       | Stage weight. The trial score is the weighted **reach**, normalized (see [Metrics](metrics.md)). |
 | `checks`             | list        | Each item is `{<check_name>: {<params>}}`. All must pass. |
+| `continuous`         | bool        | Optional. `true` ⇒ the stage earns partial credit ∈ [0,1] from a check's `closeness` (and stops gating). Built-in checks are binary, so today this is a non-gating binary stage — forward-looking (see [Metrics](metrics.md)). |
+| `gating`             | bool        | Optional, default `true`. `false` ⇒ the stage contributes its credit but does **not** absorb later stages (independent, not a pipeline). |
 | `expected_tool_calls`| list[str]   | Diagnostic only, never affects the score.              |
 
 The built-in checks are `json_with_keys` (presence) and `close_to` (correctness). Add your
@@ -130,14 +139,54 @@ loop:
   max_format_retries: 2
   continue_nudges: 0
   max_rate_limit_retries: 3   # backoff resumes on provider 429/529
+  max_transient_retries: 4    # resume on transient transport/5xx before TRANSIENT_API_ERROR
+  ux_feedback: false          # false | true | "graded"
+  audit_html: false           # also emit the styled HTML audit twin
+judge:                        # optional; how trials are graded
+  kind: rule+llm              # rule | rule+llm | llm
+  harness: orchestral/anthropic
+  model: claude-opus-4-8
 ```
 
 | Key        | Notes                                                                       |
 |------------|----------------------------------------------------------------------------|
-| `runtime`  | `{name, version}`. The name must be a registered runtime (`orchestral` ships; add more via `toolbench.core.runtime.register_runtime`), and `version` is a PEP 440 spec enforced against the installed runtime at run start. |
+| `runtime`  | `{name, version}`. The name must be a registered runtime, and `version` is a PEP 440 spec enforced against the installed runtime at run start. Besides `orchestral`, the runtimes `claude_code` and `codex` ship, each with its own `runtime:` keys — see [Harnesses](../guides/harnesses.md) for the full list. Add more via `toolbench.core.runtime.register_runtime`. |
 | `provider` | `{name, ...request params}`, and the provider must be registered. Model ≠ here. |
 | `core`     | Exactly one of `tools: [...]` (runtime primitives) **or** `builtin: true`.  |
 | `loop`     | Loop policy. The CLI loop flags override these per run.                     |
+| `judge`    | Optional. See [Judge](#judge).                                              |
+
+### Loop keys
+
+| Key                     | Notes                                                                    |
+|-------------------------|--------------------------------------------------------------------------|
+| `max_iterations`        | Tool-call loop budget.                                                    |
+| `max_format_retries`    | Retries on a malformed tool call before failing.                         |
+| `continue_nudges`       | Presence-gated resume nudges.                                            |
+| `max_rate_limit_retries`| Backoff resumes on provider 429/529.                                     |
+| `max_transient_retries` | Resumes on a transient transport/5xx fault before recording `TRANSIENT_API_ERROR` (default `4`). |
+| `ux_feedback`           | `false` (default), `true`, or `"graded"`. Adds one unscored UX-critique turn per trial. |
+| `audit_html`            | bool. Also emit a styled HTML twin of each trial's audit log.           |
+
+### Judge
+
+The optional top-level `judge:` block selects how trials are graded. It is validated at load,
+and unknown keys are rejected.
+
+```yaml
+judge: { kind: rule+llm, harness: orchestral/anthropic, model: claude-opus-4-8 }
+```
+
+| Key          | Notes                                                                       |
+|--------------|-----------------------------------------------------------------------------|
+| `kind`       | `rule` (deterministic checks only), `rule+llm` (rule primary + an LLM opinion), or `llm`. |
+| `harness`    | The harness the *judge* is called through — **not** the agent under test.   |
+| `model`      | Model the judge uses.                                                        |
+| `max_tokens` | Optional request param for the judge call.                                   |
+| `temperature`| Optional request param for the judge call.                                   |
+| `artifact_chars`| Optional. Max characters of each answer/reference file the judge reads (default 8000). Raise it for large deliverables or references. |
+
+`--judge` / `--judge-harness` / `--judge-model` on `run` and `regrade` override this per run.
 
 Everything in `provider:` besides `name` and `cache_bust` is forwarded as a
 request parameter on every model call (`max_tokens`, `temperature`, ...).

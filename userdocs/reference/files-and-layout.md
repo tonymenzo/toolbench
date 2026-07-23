@@ -60,12 +60,57 @@ runs/<timestamp>_<benchmark>_<model>_<label>/
     ├── trial.json          # full per-trial record (grade, tokens, cost, config)
     ├── transcript.jsonl.gz # every tool call (gzipped)
     ├── console.log         # this trial's styled log
+    ├── audit.txt           # always written: full trajectory + every tool input
+    ├── audit.html          # only with --audit-html / loop.audit_html: styled twin of audit.txt
+    ├── ux_feedback.md      # only with --ux-feedback: the trial's unscored UX critique
     └── artifacts/          # minimal evidence kept for `regrade`
         └── scripts/        # agent-authored code lifted from the transcript
 ```
 
 A `trial_id` encodes its cell, e.g. `full_local__n000__seed1001` (and includes the
 harness/variant/model when those axes are swept).
+
+### `summary.json` fields
+
+Beyond the per-cell metrics, the top level of `summary.json` records:
+
+| Field           | Shape                                                     | Notes                                          |
+|-----------------|----------------------------------------------------------|------------------------------------------------|
+| `integrity`     | `{scanned, flagged: {tid: {n_hits, sample}}}`            | Integrity-scan tally and any quarantined trials. |
+| `provenance`    | `{git_sha, versions, harnesses}`                          | Reproducibility record for the whole run.       |
+| `pass_criterion`| `"all_stages"` or `"reach>=<x>"`                          | How a "pass" was defined for pass@k / pass^k.   |
+| `reach_weights` | `{stage_order, w, pass_threshold}`                        | The rubric's stage order, weights, and threshold. |
+| `estimated_api_equivalent_cost_usd` | float                                | Only for subscription runs: token-derived API-equivalent estimate (not real spend). |
+| `estimated_cost_basis` | `{basis, model, rates_usd_per_million_tokens, source, …}` | The rates/source behind that estimate.  |
+
+Each per-cell block additionally carries:
+
+| Field           | Notes                                                                         |
+|-----------------|-------------------------------------------------------------------------------|
+| `mean_tokens`   | `{initial_input, input, output, cache_read, cache_creation}`.                 |
+| `mean_estimated_api_equivalent_cost_usd` | Mean API-equivalent estimate per trial (subscription runs only).    |
+| `trial_scores`  | The cell's per-trial reaches, sorted.                                         |
+| `stage_display` | Per-stage continuous-credit / distance breakdown.                             |
+| `tool_usage`    | Per-tool call/error counts + MCP-vs-script adoption.                          |
+| `ux_ratings`    | Aggregated UX-feedback ratings (present only when UX feedback ran).           |
+| `pass_threshold`| The threshold in force for the cell.                                          |
+| `retries`       | Retry tallies for the cell.                                                   |
+
+### `trials.jsonl` fields
+
+Each per-trial row adds, alongside its grade:
+
+| Field                  | Notes                                                                  |
+|------------------------|------------------------------------------------------------------------|
+| `stage_credits`        | Per-stage credit ∈ [0,1] (what the stage contributed to reach).        |
+| `stage_continuous`     | Per-stage `continuous` flag (whether that stage scored continuously).  |
+| `stage_distance`       | Per-stage distance-to-reference, when a check recorded one.            |
+| `initial_input_tokens` | Tokens in the first request.                                          |
+| `cache_creation_tokens`| Cache-creation token count.                                           |
+
+On a **quarantined** trial the row also carries `integrity_leak`, `integrity_evidence`, and
+`score_pre_integrity` — the original score is kept there while `score` is set to `0` and
+`failure_mode` becomes `INTEGRITY_LEAK`.
 
 ## What to commit vs. ignore
 

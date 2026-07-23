@@ -18,6 +18,9 @@ runs/2026-05-31T14-02-08_geometry_claude-haiku-4-5_run/
     ├── trial.json       # full per-trial record (grade, tokens, cost)
     ├── transcript.jsonl.gz   # every tool call
     ├── console.log      # the styled per-trial log
+    ├── audit.txt        # readable transcript + grade audit (always written)
+    ├── audit.html       # HTML twin of audit.txt (only with --audit-html)
+    ├── ux_feedback.md   # the agent's tool critique (only with --ux-feedback)
     └── artifacts/       # the minimal evidence kept for `regrade`
 ```
 
@@ -72,6 +75,61 @@ Read each as a different *question*:
 `pass@1 = pass^1 = c/n`, the raw success rate. As `k` grows the two fan apart, with pass@k
 climbing toward 1 and pass^k falling toward 0, and `k_sweep.png` plots exactly that fan.
 
+## The run header: provenance & integrity
+
+Above the cells, `summary.txt` opens with a header that makes the file self-describing:
+
+```console
+════════════════════════════════════ RUN  examples/geometry ═══════════════════
+  run_id     2026-05-31T14-02-08_geometry_claude-haiku-4-5_run
+  task       examples/geometry       k          5   (n per cell)
+  trials     10                      cells      2
+  budget     $5.00 cap   $0.42 spent
+  versions   toolbench 0.6.1  orchestral 0.4.0
+  provenance git a1b2c3d4e5   harness orchestral/anthropic
+  integrity  CLEAN (10 trials scanned)
+```
+
+- **`versions`** pins toolbench *and* the runtime that actually drove the run, so a summary
+  reproduces without opening `manifest.json`.
+- **`provenance`** tails the code `git <sha>` and the harness id(s) behind the run.
+- **`integrity`** is the answer-key firewall. Normally it reads `CLEAN (N trials scanned)`.
+  If any trial referenced the graded answer key from outside its sandbox, this turns into a
+  loud `** N TRIAL(S) QUARANTINED — reached the answer key **` banner (with an evidence
+  snippet). A quarantined trial is **scored 0** with failure mode `INTEGRITY_LEAK`; its
+  pre-quarantine score is preserved as `score_pre_integrity` but **excluded from the
+  headline** so a leak can never inflate a result.
+
+## Per-trial detail: TRIALS, TOOLS, tokens
+
+Each cell block carries three sections the cell mean would otherwise hide:
+
+```console
+  TRIALS
+  ------
+
+      scores     1.00  1.00  0.50  1.00  0.50   (min 0.50  max 1.00  spread 0.50)
+      UX rating  7  8  6  7  8        (blind, 1-10)
+      retries    rate-limit 1   transient 0   nudges 2
+
+  TOOLS
+  -----
+
+      adoption   5/5 trials used domain tools  (4 via MCP, 1 via script)
+      MCP calls:
+        midpoint    9
+        distance    7   (1 err)
+```
+
+- **TRIALS** — the per-trial `scores` with min/max/spread (so a bimodal cell is visible),
+  the blind `UX rating` (1–10) when `--ux-feedback` is on, and a `retries` rollup
+  (rate-limit / transient / nudges) as a reliability read.
+- **TOOLS** — `adoption N/n trials used domain tools`, split into `X via MCP, Y via script`,
+  plus a per-tool call/error breakdown. The MCP-vs-script split is the tell for whether the
+  agent actually **drove the served pipeline** or quietly hand-rolled its own scripts.
+- **token means** live in the COST section (`mean_tokens`): `initial input` (the starting
+  context), cumulative `input` / `output`, and `cache read` / `cache write`, all per trial.
+
 ## Reading a sweep as an ablation
 
 Because the axes are orthogonal, the **gap between two rows** is attributable. In the
@@ -90,9 +148,24 @@ CI that excludes 0 is a delta your n actually supports.
 ## Where trials die
 
 `per_stage_k.png` (and the `stages` block in `summary.json`) show the per-stage pass rate.
-Because grading is a prefix product, this is a **funnel**. If `midpoint_correct` passes 80%
-but `distance_correct` only 30%, the distance step is where runs fall off, so look at a few
+For the default rubric — every stage binary and gating — this is a **funnel**: a stage can
+only pass if every stage before it did. If `midpoint_correct` passes 80% but
+`distance_correct` only 30%, the distance step is where runs fall off, so look at a few
 failing `trials/<id>/` to see why.
+
+The funnel reading holds *only* for the default gating-binary case. A `continuous: true`
+stage contributes partial `[0,1]` credit rather than pass/fail, and a `gating: false` stage
+does **not** absorb the stages after it — so with those knobs the stages aren't a strict
+prefix product. A continuous stage renders differently in `summary.txt`, showing the credit
+and mean distance it came from instead of a plain rate:
+
+```console
+      answer_written     5/5       1.00
+      area_correct       4/5  credit 0.86   dist 0.030 rel
+```
+
+See [Metrics](../reference/metrics.md#continuous-and-independent-stages) for exactly how
+each stage feeds the score.
 
 ## Cost & budget
 
@@ -100,6 +173,13 @@ Every run takes a hard `--max-cost-usd` cap and aborts the moment spend would ex
 `summary.txt` reports total spend and mean cost per trial. A `--dry-run` (with
 `--model stub`) exercises the entire pipeline (wiring, grading, summary, plots) for
 \$0, which is the right way to validate a new benchmark before spending tokens.
+
+Subscription runtimes (`claude_code`, `codex`) don't expose a per-run charge, so their
+observed spend stays \$0 and doesn't consume the API budget cap. When a price snapshot exists
+for the model, `summary.txt` also shows a token-derived **API-equivalent (estimated,
+subscription)** figure — a counterfactual for comparing a subscription arm against an API arm,
+not money billed. `summary.json` keeps it separate as `estimated_api_equivalent_cost_usd`,
+with the rates and source in `estimated_cost_basis`, so it can never be mistaken for real spend.
 
 ## Re-grading without re-running
 

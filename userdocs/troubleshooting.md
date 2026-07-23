@@ -66,6 +66,49 @@ You don't need to re-run the agent. `toolbench regrade --run-id <id>` replays th
 rubric against each trial's preserved `artifacts/`. If a check needs evidence that wasn't
 preserved, widen what the runner keeps (the `KEEP_*` lists in `core/runner.py`).
 
+## A failure mode I don't recognize
+
+Every completed trial carries exactly one `failure_mode` label (it shows up in `summary.txt`,
+plot legends, and each trial's `grade.json`). Most are **operational**, they mean the
+provider or transport misbehaved, not that the agent lacked the capability, so don't read them
+as a capability signal.
+
+- **`MODEL_FORMAT_CRASH`** — the model emitted malformed tool-call JSON (empty/truncated
+  arguments, leaked channel markers, raw source where a string belongs). Covers **both**
+  shapes of the same defect: a client-side JSON decode error and a provider-side rejection
+  (Groq returns HTTP 400 `tool_use_failed` / echoes `failed_generation`). Auto-retried up to
+  the harness's `max_format_retries`; if it still can't parse, the trial ends here.
+- **`INTEGRITY_LEAK`** — the trial's tool calls referenced the ground-truth answer key, so it
+  is quarantined: scored 0, excluded from the headline, with the pre-quarantine score kept as
+  `score_pre_integrity` and the offending calls in `integrity_evidence`. Fix by running under
+  a sandbox-confining harness (`sandbox: true`) or keeping ground truth outside any reachable
+  path. (This label is assigned as a literal by the run finalizer, not part of the closed
+  `failure_modes.py` vocabulary.)
+- **`CONTEXT_LENGTH_EXCEEDED`** — the conversation outgrew the model's context window and the
+  provider rejected the request. Operational, not a capability signal; shorten the task,
+  trim the toolset, or use a longer-context model.
+- **`RATE_LIMITED`** — the provider throttled (429) or shed load (529/overloaded) and the
+  runner's bounded backoff was exhausted. Raise `--max-rate-limit-retries` or slow the run
+  with a lower `--parallel`.
+- **`TRANSIENT_API_ERROR`** — a transient transport/server fault reaching the provider
+  (connect/read timeout, dropped connection, HTTP 5xx) that survived backoff. Raise
+  `--max-transient-retries`; a single endpoint blip shouldn't contaminate a campaign.
+
+The rest of the closed vocabulary, for reference: **`AGENT_CRASH`** (an uncaught, unclassified
+exception from the agent loop), **`MODEL_STOPPED_EARLY`** (the model returned a plain message
+instead of the next expected tool call, i.e. thought it was done while the rubric was still
+incomplete), **`GRADE_ERROR`** (the judge raised while scoring an otherwise-complete
+trajectory), **`INCOMPLETE_AT_<STAGE_ID>`** (every stage up to but not including the named one
+passed; the named one failed), and **`NONE`** (all rubric stages passed).
+
+## "an LLM judge needs a harness"
+
+You asked for an LLM judge (`--judge llm` / `rule+llm`, or a harness `judge:` block) without
+telling it where to run. An LLM judge is addressed as an `(harness, model)` pair, so pass
+`--judge-harness` (e.g. `orchestral/anthropic`, `claude-code/default`) or set
+`judge: { harness: ... }` in the harness config. The error is raised at setup, before any
+trial runs.
+
 ## Building the docs
 
 ```bash

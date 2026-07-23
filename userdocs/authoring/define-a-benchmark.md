@@ -56,8 +56,14 @@ rubric:
 | `default_*`          | Axis defaults used when the CLI flag is omitted.                     |
 | `ground_truth.dir`   | Directory of reference files for correctness checks.                 |
 | `rubric`             | The grading spec. See [Rubrics & checks](rubrics-and-checks.md).     |
-| `checks`             | *(optional)* path to a benchmark-local `checks.py` (custom checks).  |
+| `checks`             | *(optional)* path to a benchmark-local `checks.py` **file** (custom checks) — a `.py` file, not a directory or dotted module. |
 | `extends`            | *(optional)* parent benchmark dir to inherit from. See [Extends](../reference/schemas.md#extends). |
+
+This funnel is a pipeline: each stage gates the next, so the trial score is the classic
+prefix product. For rubrics that aren't a pipeline, a stage may carry `continuous:` (partial
+credit) or `gating: false` (independent, non-absorbing) and the rubric may carry a
+`pass_threshold:` (a pass is reach ≥ threshold, not all-stages). See
+[Rubrics & checks](rubrics-and-checks.md#per-stage-options).
 
 When sibling benchmarks share one underlying task but grade different
 deliverables (a shape-only rubric, a stricter tolerance), don't duplicate the

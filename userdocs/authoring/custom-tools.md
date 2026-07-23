@@ -74,8 +74,8 @@ that carries a `base_directory` to the sandbox automatically.)
 ## Adding a model provider
 
 The CLI's `--models` are resolved through provider factories. toolbench ships
-`anthropic`, `openai`, `google`, `groq`, `litellm`, and `stub`. To add your own, register a
-factory before the run:
+`anthropic`, `openai`, `google`, `groq`, `litellm`, and `stub` (the dry-run stub), plus
+`subscription` for the CLI runtimes. To add your own, register a factory before the run:
 
 ```python
 from toolbench.core.llm_factory import register_provider
@@ -88,3 +88,7 @@ register_provider("myprovider", my_provider)
 
 Then a harness whose `provider.name` is `myprovider` will use it. API keys come from the
 environment (or a `.env` at the repo root), loaded before anything reads `os.environ`.
+
+The same registry also routes LLM **judges**: an LLM-as-judge is built through the provider
+registry exactly like the agent's model, so a custom provider registered here can serve as a
+judge backend too (see [Choosing a judge](overview.md#choosing-a-judge)).

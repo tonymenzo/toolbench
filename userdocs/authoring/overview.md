@@ -58,6 +58,38 @@ via `toolbench run --benchmark <path>` (e.g. `examples/geometry`). There's nothi
 to register. The benchmark lives wherever you put it, and the CLI loads it directly
 from the directory you point at.
 
+## Choosing a judge
+
+A run is graded by the deterministic **rule** judge by default — it evaluates each stage's
+`checks:` list, and it's what keeps runs reproducible and `regrade`-able. You override that
+per run, without editing the benchmark: a harness may carry an optional `judge:` block, or the
+CLI may pass `--judge` / `--judge-harness` / `--judge-model`. **Precedence** (first wins):
+
+1. CLI `--judge` / `--judge-harness` / `--judge-model`
+2. the harness's `judge:` block
+3. the default `rule`
+
+`kind` is one of `rule`, `rule+llm`, or `llm`. In **`rule+llm`** the rule grade stays
+**primary and authoritative** — `score` and the failure mode come from it — and the LLM judge
+runs *after* it, its grade attached additively in `alt_grades`. So the headline number stays
+deterministic and regradeable while a second opinion rides along. **`llm`-only** is for
+ablations (`regrade --judge llm`), never the headline, since the score would then drift with
+the judge model's version.
+
+The judge's `harness` names the route the *judge* is called through and may differ from the
+agent's harness — a subscription judge can grade an API run and vice versa (subscription
+judges are credential-free and unpriced). Allowed keys in a `judge:` block are `kind`,
+`harness`, `model`, `max_tokens`, `temperature`, and `artifact_chars` (how much of each
+answer/reference file the judge reads — raise it above the 8000-char default for large
+deliverables):
+
+```yaml
+judge:
+  kind: rule+llm
+  harness: orchestral/anthropic
+  model: claude-opus-4-8
+```
+
 ## Reproducibility, for free
 
 Every run writes a `manifest.json` with the exact config, the git SHA, and pinned

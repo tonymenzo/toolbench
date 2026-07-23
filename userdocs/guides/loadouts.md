@@ -66,7 +66,9 @@ Each source names exactly one backend:
 
     Connect to **any MCP server** — stdio or HTTP — via orchestral's MCP client
     (requires `pip install 'toolbench[mcp]'`). The session stays open for the
-    trial and is torn down with it:
+    trial and is torn down with it. MCP wiring differs by [runtime](harnesses.md#runtimes):
+    this in-process client is the `orchestral` path — under `claude_code` / `codex` the
+    runtime itself wires MCP (a `toolbase serve` subprocess handed to the coding-agent CLI):
 
     ```yaml
     tools:
