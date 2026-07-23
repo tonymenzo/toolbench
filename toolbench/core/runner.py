@@ -423,6 +423,11 @@ class TrialRunner:
         transient_retries = 0    # TRANSIENT_API_ERROR backoff resumes used
         nudges = 0               # presence-gated continue-nudges issued
         rate_limit_retries = 0   # RATE_LIMITED backoff resumes used
+        # Recovery turns injected back into the session (format-crash
+        # corrections, rate-limit/transient resumes, continue-nudges). These
+        # never surface in trajectory.tool_calls, so we record them here and
+        # weave them into the transcript for auditability.
+        interventions: list[dict] = []
         try:
             if isinstance(llm, StubLLM):
                 # Dry-run: skip the LLM call entirely. Persist a minimal
@@ -444,6 +449,11 @@ class TrialRunner:
                     # to the sandbox. Orchestral ignores these via **_.
                     sandbox_dir=str(sandbox_dir),
                     harness=harness, loadout=loadout,
+                    # The benchmark tree holds the ground-truth answer key
+                    # (soln/); the Bash sandbox (if the harness enables it)
+                    # deny-reads these so a trial cannot reach it.
+                    protected_paths=(benchmark_dir if isinstance(benchmark_dir, list)
+                                     else [benchmark_dir]) if benchmark_dir else [],
                 )
                 # One resume loop over the SAME agent / sandbox / context.
                 # After each agent.run we either:
@@ -493,6 +503,13 @@ class TrialRunner:
                                 "backslash as \\\\, newline as \\n, tab as \\t, and "
                                 "double-quote as \\\". Avoid stray non-ASCII whitespace.\n"
                                 "Then continue the task.")
+                            interventions.append({
+                                "type": "format_retry",
+                                "index": format_retries,
+                                "after_tool_call": len(trajectory.tool_calls),
+                                "reason": detail,
+                                "injected_message": message,
+                            })
                             continue
                         if (crash_kind == RATE_LIMITED
                                 and rate_limit_retries < max_rate_limit_retries):
@@ -514,6 +531,13 @@ class TrialRunner:
                                 "The previous request was interrupted by a temporary "
                                 "provider error (rate limit). Continue the task from "
                                 "where you left off.")
+                            interventions.append({
+                                "type": "rate_limit_retry",
+                                "index": rate_limit_retries,
+                                "after_tool_call": len(trajectory.tool_calls),
+                                "reason": "RATE_LIMITED",
+                                "injected_message": message,
+                            })
                             continue
                         if (crash_kind == TRANSIENT_API_ERROR
                                 and transient_retries < max_transient_retries):
@@ -539,6 +563,13 @@ class TrialRunner:
                                 "The previous request was interrupted by a temporary "
                                 "connection error reaching the model. Continue the "
                                 "task from where you left off.")
+                            interventions.append({
+                                "type": "transient_retry",
+                                "index": transient_retries,
+                                "after_tool_call": len(trajectory.tool_calls),
+                                "reason": "TRANSIENT_API_ERROR",
+                                "injected_message": message,
+                            })
                             continue
                         break  # unrecoverable crash, or retries exhausted
 
@@ -561,6 +592,13 @@ class TrialRunner:
                                 f"is not present yet ({missing}). Keep working with "
                                 "the tools until the deliverable exists; do not stop "
                                 "until you have produced it.")
+                            interventions.append({
+                                "type": "continue_nudge",
+                                "index": nudges,
+                                "after_tool_call": len(trajectory.tool_calls),
+                                "reason": f"missing deliverable: {missing}",
+                                "injected_message": message,
+                            })
                             continue
                     break  # complete, finished-but-wrong, or no nudge warranted/left
 
@@ -816,11 +854,21 @@ class TrialRunner:
                                                       encoding="utf-8")
 
         # Full tool-call list lives here; trial.json carries only the
-        # metadata summary.
-        transcript_records = [
-            {"type": "tool_call", **tc.to_dict()}
-            for tc in trajectory.tool_calls
+        # metadata summary. Recovery turns (format-crash corrections, rate-
+        # limit/transient resumes, continue-nudges) are woven in at the point
+        # they were injected — `after_tool_call: N` means "just after the Nth
+        # completed tool call" — so a reviewer can see exactly what feedback
+        # the model received and when.
+        by_pos: dict[int, list[dict]] = {}
+        for iv in interventions:
+            by_pos.setdefault(iv["after_tool_call"], []).append(iv)
+        transcript_records: list[dict] = [
+            {"type": "intervention", **iv} for iv in by_pos.get(0, [])
         ]
+        for i, tc in enumerate(trajectory.tool_calls):
+            transcript_records.append({"type": "tool_call", **tc.to_dict()})
+            for iv in by_pos.get(i + 1, []):
+                transcript_records.append({"type": "intervention", **iv})
         if trajectory.final_response:
             transcript_records.append({
                 "type": "assistant",

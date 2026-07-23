@@ -523,6 +523,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         "max_rate_limit_retries": args.max_rate_limit_retries,
         "max_transient_retries": args.max_transient_retries,
         "ux_feedback": args.ux_feedback,
+        # HTML audit twin: CLI override, else the harness's loop.audit_html,
+        # else off (the text audit is always written).
+        "audit_html": (bool(args.audit_html) if args.audit_html is not None
+                       else any(bool(h.loop.get("audit_html"))
+                                for h in harnesses)),
         "parallel": args.parallel,
         "dry_run": args.dry_run,
         "versions": {"orchestral-ai": _pkg_version("orchestral-ai"),
@@ -1088,6 +1093,34 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
                   stage_order, stage_weights, aborted) -> None:
     """Re-aggregate from the full trial set, write summary.json + summary.txt,
     and print the rendered summary."""
+    # Integrity gate FIRST: quarantine any trial that reached the ground-truth
+    # answer key (the claude_code sandbox does not confine Bash). A flagged
+    # trial cannot be trusted, so its score is zeroed for aggregation and it is
+    # marked INTEGRITY_LEAK; the original score is kept for transparency.
+    integrity_flagged = {}
+    try:
+        from toolbench.core.integrity import scan_run
+        integrity_flagged = scan_run(run_dir, all_trial_records, manifest)
+    except Exception as e:
+        print(f"warning: integrity scan failed: {type(e).__name__}: {e}",
+              file=sys.stderr)
+    if integrity_flagged:
+        for row in all_trial_records:
+            tid = row.get("trial_id")
+            if tid in integrity_flagged:
+                row["integrity_leak"] = True
+                row["integrity_evidence"] = integrity_flagged[tid][:5]
+                row.setdefault("score_pre_integrity", row.get("score"))
+                row["score"] = 0.0
+                row["ok"] = False
+                row["failure_mode"] = "INTEGRITY_LEAK"
+        # Persist the flags to trials.jsonl so the quarantine is on the record.
+        with open(run_dir / "trials.jsonl", "w") as fh:
+            for row in all_trial_records:
+                fh.write(json.dumps(row, default=str) + "\n")
+        print(f"  INTEGRITY: {len(integrity_flagged)} trial(s) quarantined "
+              f"(reached the answer key): {', '.join(integrity_flagged)}")
+
     pass_threshold = (manifest.get("reach_weights") or {}).get("pass_threshold")
     summary = aggregate(all_trial_records, k=k,
                         stage_order=stage_order, stage_weights=stage_weights,
@@ -1098,6 +1131,11 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
     summary["reach_weights"] = manifest.get("reach_weights", {})
     summary["total_spent_usd"] = round(budget.spent, 6)
     summary["aborted_by_budget"] = aborted
+    summary["integrity"] = {
+        "scanned": len(all_trial_records),
+        "flagged": {tid: {"n_hits": len(hits), "sample": hits[:2]}
+                    for tid, hits in integrity_flagged.items()},
+    }
     # Provenance for the summary header. Show toolbench (always) + the version
     # of the RUNTIME(S) that actually drove the run: orchestral-ai for
     # orchestral runs, the CLI version for claude_code / codex runs. Don't list
@@ -1146,6 +1184,15 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
                            run_dir / "per_stage_k.png")
     except Exception as e:
         print(f"warning: failed to render per_stage_k.png: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+
+    # Per-trial audit logs (full trajectory + every tool's input fields).
+    try:
+        from toolbench.reporting.audit_log import write_trial_audits
+        write_trial_audits(summary, all_trial_records, run_dir,
+                           html_too=bool(manifest.get("audit_html", False)))
+    except Exception as e:
+        print(f"warning: failed to write trial audit logs: "
               f"{type(e).__name__}: {e}", file=sys.stderr)
 
     rendered = render_run_summary(summary, manifest=manifest, run_dir=run_dir)
@@ -1809,6 +1856,10 @@ def cli() -> None:
                    "the full working tree (not just preserved artifacts) — "
                    "expensive on disk, but useful for auditing by-hand arms "
                    "whose deliverable may be in a non-preserved format.")
+@click.option("--audit-html/--no-audit-html", "audit_html", default=None,
+              help="Also emit a styled HTML twin of each trial's audit log "
+                   "(the plain-text audit.txt is always written, headless-safe). "
+                   "Default: from the harness loop.audit_html (off unless set).")
 def _run(**kw) -> int:
     """Run a benchmark across the (harness × loadout × variant × model) grid."""
     return cmd_run(SimpleNamespace(**kw))
