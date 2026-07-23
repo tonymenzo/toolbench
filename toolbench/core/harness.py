@@ -84,12 +84,13 @@ class Harness:
                     f"harness {self.id!r}: `judge` must be a mapping "
                     "{kind, harness, model}")
             unknown = set(self.judge) - {"kind", "harness", "model",
-                                         "max_tokens", "temperature"}
+                                         "max_tokens", "temperature",
+                                         "artifact_chars"}
             if unknown:
                 raise ValueError(
                     f"harness {self.id!r}: unknown judge key(s) "
                     f"{sorted(unknown)}; known: kind, harness, model, "
-                    "max_tokens, temperature")
+                    "max_tokens, temperature, artifact_chars")
             # Fail at load time rather than after a paid run.
             from .judge_select import resolve
             resolve(self.judge)
