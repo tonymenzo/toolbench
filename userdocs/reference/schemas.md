@@ -184,6 +184,7 @@ judge: { kind: rule+llm, harness: orchestral/anthropic, model: claude-opus-4-8 }
 | `model`      | Model the judge uses.                                                        |
 | `max_tokens` | Optional request param for the judge call.                                   |
 | `temperature`| Optional request param for the judge call.                                   |
+| `artifact_chars`| Optional. Max characters of each answer/reference file the judge reads (default 8000). Raise it for large deliverables or references. |
 
 `--judge` / `--judge-harness` / `--judge-model` on `run` and `regrade` override this per run.
 

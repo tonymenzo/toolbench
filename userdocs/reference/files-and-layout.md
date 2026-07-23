@@ -80,12 +80,15 @@ Beyond the per-cell metrics, the top level of `summary.json` records:
 | `provenance`    | `{git_sha, versions, harnesses}`                          | Reproducibility record for the whole run.       |
 | `pass_criterion`| `"all_stages"` or `"reach>=<x>"`                          | How a "pass" was defined for pass@k / pass^k.   |
 | `reach_weights` | `{stage_order, w, pass_threshold}`                        | The rubric's stage order, weights, and threshold. |
+| `estimated_api_equivalent_cost_usd` | float                                | Only for subscription runs: token-derived API-equivalent estimate (not real spend). |
+| `estimated_cost_basis` | `{basis, model, rates_usd_per_million_tokens, source, …}` | The rates/source behind that estimate.  |
 
 Each per-cell block additionally carries:
 
 | Field           | Notes                                                                         |
 |-----------------|-------------------------------------------------------------------------------|
 | `mean_tokens`   | `{initial_input, input, output, cache_read, cache_creation}`.                 |
+| `mean_estimated_api_equivalent_cost_usd` | Mean API-equivalent estimate per trial (subscription runs only).    |
 | `trial_scores`  | The cell's per-trial reaches, sorted.                                         |
 | `stage_display` | Per-stage continuous-credit / distance breakdown.                             |
 | `tool_usage`    | Per-tool call/error counts + MCP-vs-script adoption.                          |

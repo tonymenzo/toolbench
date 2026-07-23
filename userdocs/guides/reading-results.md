@@ -175,8 +175,11 @@ Every run takes a hard `--max-cost-usd` cap and aborts the moment spend would ex
 \$0, which is the right way to validate a new benchmark before spending tokens.
 
 Subscription runtimes (`claude_code`, `codex`) don't expose a per-run charge, so their
-observed spend stays \$0 and doesn't consume the API budget cap — keep that in mind when
-comparing a subscription arm's cost against an API arm's.
+observed spend stays \$0 and doesn't consume the API budget cap. When a price snapshot exists
+for the model, `summary.txt` also shows a token-derived **API-equivalent (estimated,
+subscription)** figure — a counterfactual for comparing a subscription arm against an API arm,
+not money billed. `summary.json` keeps it separate as `estimated_api_equivalent_cost_usd`,
+with the rates and source in `estimated_cost_basis`, so it can never be mistaken for real spend.
 
 ## Re-grading without re-running
 

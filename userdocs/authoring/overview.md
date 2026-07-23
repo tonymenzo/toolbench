@@ -79,7 +79,9 @@ the judge model's version.
 The judge's `harness` names the route the *judge* is called through and may differ from the
 agent's harness — a subscription judge can grade an API run and vice versa (subscription
 judges are credential-free and unpriced). Allowed keys in a `judge:` block are `kind`,
-`harness`, `model`, `max_tokens`, `temperature`:
+`harness`, `model`, `max_tokens`, `temperature`, and `artifact_chars` (how much of each
+answer/reference file the judge reads — raise it above the 8000-char default for large
+deliverables):
 
 ```yaml
 judge:
