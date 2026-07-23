@@ -7,8 +7,13 @@ harness supplies the core/primitive tools (orchestral primitives, via the
 loadout's toolkit is an ordered list of sources, each routed by backend:
 
   - `python`  : import a module (dotted name OR filesystem path) that
-                exposes `TOOLS` (and optional `BUNDLES`); apply `select:`;
-                this is the no-dependency escape hatch.
+                exposes `TOOLS` (and optional `BUNDLES`) or a
+                `make_tools(base_directory, select=, config=)` factory;
+                apply `select:`; this is the no-dependency escape hatch.
+                An optional `namespace:` presents the tools as
+                `<namespace>__<Tool>` using the same scheme toolbase serves,
+                so a bridge to a toolkit reads identically to its `toolbase:`
+                source (matching transcripts / `expected_tool_calls`).
   - `toolbase`: resolved in-process via toolbase's orchestral bridge
                 (`toolbase.connect.orchestral.toolbase_tools`); the
                 source report records each served toolkit's installed
@@ -144,6 +149,75 @@ def _apply_select(all_tools: list, bundles: dict, select, module: str) -> list:
     return chosen
 
 
+def _namespaced_upstream(tool) -> str:
+    """The upstream (un-namespaced) name toolbase would serve this tool under.
+
+    We READ it off the tool's own `_mcp_display_name` — the exact field
+    toolbase's toolkit host sets and advertises on the wire, and that toolbase
+    then namespaces as `<toolkit>__<_mcp_display_name>`. Sourcing the name from
+    the instance (rather than reimplementing toolbase's rule here) makes a
+    `python:` bridge reflect the SAME name the `toolbase:` source serves *by
+    construction* — no second copy of the convention to drift. It matters:
+    e.g. `SortByPtTool` carries `_mcp_display_name = "SortByPT"`, which a naive
+    class-name strip (`SortByPt`) would get wrong.
+
+    Fallback for a tool that doesn't carry the field: the BaseTool subclass
+    name with a trailing `Tool` stripped, PascalCase preserved — toolbase's own
+    documented default when no display name is set. (Note: a toolkit.yaml-level
+    `display_name:` override is applied by toolbase's host from the YAML and is
+    not visible to an in-process bridge; toolkits that use those can't be
+    perfectly mirrored by a bridge — use the `toolbase:` source for them.)
+
+    When toolbase is installed we call its canonical `mcp_tool_name` so there is
+    exactly one definition of the rule; the inline copy below is only the
+    no-toolbase escape-hatch fallback."""
+    try:
+        from toolbase.naming import mcp_tool_name
+        return mcp_tool_name(tool)
+    except Exception:
+        pass
+    display = getattr(tool, "_mcp_display_name", None)
+    if isinstance(display, str) and display:
+        return display
+    name = type(tool).__name__
+    return name[:-4] if name.endswith("Tool") else name
+
+
+def _namespace_tool(tool, namespace: str):
+    """Rebind `tool` to present its agent-visible name as
+    `<namespace>__<upstream>` (the toolbase scheme). The name an agent calls
+    comes from `get_tool_spec().name` (built by orchestral's SchemaGenerator
+    from the class name, NOT from `get_name()`), so we override both. Behaviour
+    (`execute`/`_run`/validation) is inherited unchanged — only the presented
+    name changes."""
+    cls = type(tool)
+    ns_name = f"{namespace}__{_namespaced_upstream(tool)}"
+    overrides = {"get_name": classmethod(lambda c, _n=ns_name: _n)}
+    try:
+        spec = cls.get_tool_spec()  # original spec (class-name-derived name)
+        ns_spec = type(spec)(name=ns_name, description=spec.description,
+                             input_schema=spec.input_schema)
+        overrides["get_tool_spec"] = classmethod(lambda c, _s=ns_spec: _s)
+    except Exception:
+        pass  # no derivable spec (e.g. a proxy); get_name override still applies
+    ns_cls = type(f"Namespaced_{cls.__name__}", (cls,), overrides)
+    try:
+        tool.__class__ = ns_cls
+    except Exception as e:
+        print(f"warning: could not namespace tool {cls.__name__!r} as "
+              f"{ns_name!r}: {e}", file=sys.stderr)
+    return tool
+
+
+def _apply_namespace(tools: list, source: Source) -> list:
+    """Apply a python source's optional `namespace:` to every returned tool.
+    No `namespace:` => tools pass through untouched (bare names, back-compat)."""
+    namespace = source.options.get("namespace")
+    if not namespace:
+        return tools
+    return [_namespace_tool(t, str(namespace)) for t in tools]
+
+
 def resolve_python_source(source: Source, base_directory: str) -> list:
     module = source.config
     mod = _import_module_or_path(module)
@@ -153,8 +227,10 @@ def resolve_python_source(source: Source, base_directory: str) -> list:
     # returns ready instances.
     make = getattr(mod, "make_tools", None)
     if callable(make):
-        return list(make(base_directory, select=source.select,
-                         config=_expand_config(source.options.get("config"))))
+        return _apply_namespace(
+            list(make(base_directory, select=source.select,
+                      config=_expand_config(source.options.get("config")))),
+            source)
     # Otherwise the static convention: a `TOOLS` list (+ optional `BUNDLES`).
     all_tools = getattr(mod, "TOOLS", None)
     if all_tools is None:
@@ -185,7 +261,7 @@ def resolve_python_source(source: Source, base_directory: str) -> list:
     tools = copied
     for t in tools:
         _maybe_set_base_directory(t, base_directory)
-    return tools
+    return _apply_namespace(tools, source)
 
 
 # --------------------------------------------------------------------------
@@ -273,16 +349,34 @@ def resolve_toolbase_source(source: Source, base_directory: str) -> list:
     # mismatch corrupts trials silently.
     tb_kwargs: dict = {"profile": profile, "project_root": project_root,
                        "quiet": True}
-    if "config_overrides" in inspect.signature(toolbase_tools).parameters:
+    _tb_params = inspect.signature(toolbase_tools).parameters
+    if "config_overrides" in _tb_params:
         tb_kwargs["config_overrides"] = {"base_directory": base_directory}
     else:
         print("warning: installed toolbase predates config_overrides — "
               "toolbase-served tools will NOT be scoped to the trial "
               "sandbox (file-path tool calls will misresolve). Upgrade "
               "toolbase.", file=sys.stderr)
+    # Ask toolbase (when new enough) to report how many tools each toolkit
+    # dropped, so a serves-1-of-54 misconfiguration is visible here instead of
+    # only in serve.log. quiet=True suppresses toolbase's own console warning.
+    drop_report: list = []
+    if "report" in _tb_params:
+        tb_kwargs["report"] = drop_report
 
     stack = _source_stack(base_directory)
     tools = list(stack.enter_context(toolbase_tools(**tb_kwargs)))
+    # A profile legitimately serves only a subset of a toolkit's tools (its
+    # selected bundles), so `hidden > 0` is normal and NOT worth warning about
+    # every trial. Warn only when a toolkit advertised tools but served *none* —
+    # the unambiguous "you pointed at a profile and got nothing" misconfig.
+    for r in drop_report:
+        if r.get("advertised", 0) > 0 and r.get("served", 0) == 0:
+            print(f"warning: toolbase source {source.config!r}: toolkit "
+                  f"{r['toolkit']!r} advertised {r['advertised']} tools but "
+                  "served 0 — every tool was filtered out by the profile / "
+                  "bundle selection / config gating. Check the profile's "
+                  "bundles and `tb config`.", file=sys.stderr)
     # The profile curates what toolbase serves; a loadout-level `select:`
     # carves an ablation arm out of that served set without authoring one
     # profile per arm. Items match the namespaced name (`toolkit__tool`)

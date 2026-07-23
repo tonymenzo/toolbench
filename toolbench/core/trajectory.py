@@ -66,7 +66,10 @@ class ToolCall:
 class Trajectory:
     tool_calls: list[ToolCall] = field(default_factory=list)
     final_response: str = ""
-    tokens: dict = field(default_factory=lambda: {"input": 0, "output": 0,
+    # `initial_input` is the size of the first request (system prompt + tools +
+    # task); `input`/`output` are cumulative across the whole agentic run.
+    tokens: dict = field(default_factory=lambda: {"initial_input": 0,
+                                                  "input": 0, "output": 0,
                                                   "cache_read": 0, "cache_creation": 0})
     cost_usd: float | None = None
     # The model id the provider actually served (usage.model_name — for

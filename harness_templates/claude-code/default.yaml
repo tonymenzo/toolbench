@@ -1,0 +1,20 @@
+# claude_code runtime: drives `claude -p` under a subscription.
+# See README.md in this directory for every key the runtime reads.
+name: claude-code/default
+runtime:
+  name: claude_code
+  call_timeout_s: 3600              # per-MCP-call timeout; raise for long tool calls
+  disallowed_tools: [WebSearch, WebFetch]
+  env:
+    ENABLE_TOOL_SEARCH: "false"     # eager-load MCP tools; no ToolSearch deferral
+provider:
+  name: subscription                # credential-free placeholder llm (never called)
+  model: claude-haiku-4-5           # --model default; --models overrides
+core:
+  builtin: true                     # use Claude Code's own core tools
+loop:
+  max_iterations: 150
+  max_format_retries: 2
+  continue_nudges: 0
+  max_rate_limit_retries: 3
+  max_transient_retries: 4

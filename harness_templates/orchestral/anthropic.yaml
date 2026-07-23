@@ -1,0 +1,22 @@
+# Anthropic direct (ANTHROPIC_API_KEY). Priced in toolbench's PRICING_TABLE,
+# so --max-cost-usd binds on this route.
+name: orchestral/anthropic
+runtime:
+  name: orchestral
+  version: ">=1.3"
+provider:
+  name: anthropic
+  model: claude-haiku-4-5    # default; --models overrides
+  max_tokens: 8192
+core:
+  # Explicit in-process core toolset. Drop tools an arm bans (e.g. remove
+  # WebSearchTool when the answer is published, RunCommandTool when a shell
+  # would reach the ground truth).
+  tools: [RunCommandTool, WriteFileTool, ReadFileTool, EditFileTool,
+          FindFilesTool, FileSearchTool, RunPythonTool, TodoRead, TodoWrite]
+loop:
+  max_iterations: 150        # agent.run() round-trip cap
+  max_format_retries: 2      # resume on MODEL_FORMAT_CRASH (bad tool-call JSON)
+  continue_nudges: 0         # presence-gated resumes on early stop (0 = strict)
+  max_rate_limit_retries: 3  # resume on provider 429/529 with backoff
+  max_transient_retries: 4   # resume on transient API/transport errors
