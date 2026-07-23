@@ -46,10 +46,10 @@ axes — vary any of them on the command line to run an ablation:
 | Concept       | What it is                                                            | Where it lives          |
 |---------------|----------------------------------------------------------------------|-------------------------|
 | **Benchmark** | The task + grading rubric + ground truth.                            | `benchmark.yaml`        |
-| **Harness**   | The agent runtime, provider, core tools, and loop policy.           | `harnesses/*.yaml`      |
+| **Harness**   | The agent runtime (`orchestral`, `claude_code`, `codex`), provider, core tools, and loop policy. | `harnesses/*.yaml` |
 | **Loadout**   | The domain tools the agent gets (beyond the harness core).          | `loadouts/*.yaml`       |
 | **Variant**   | The prompt + sandbox seed (scaffolding axis), orthogonal to tools.  | `variants/<name>/`      |
-| **Rubric**    | Ordered, weighted stages of checks; trial score = prefix product.   | inside `benchmark.yaml` |
+| **Rubric**    | Ordered, weighted stages of checks; trial score = weighted reach.   | inside `benchmark.yaml` |
 
 A **loadout source** is one of:
 
@@ -71,11 +71,14 @@ A **loadout source** is one of:
 
 For each (model × condition) cell over `k` trials:
 
-- **reach̄ₖ** — mean rubric-weighted reach (how far through the staged pipeline the agent gets).
-- **pass@k** — probability at least one of k trials passes every stage (best-of-k).
-- **pass^k** — probability all k trials pass (worst-of-k).
+- $\overline{\text{reach}}_k$ — mean rubric-weighted reach: how far through the task the agent gets, on average.
+- $\text{pass@}k$ — probability that at least one of $k$ trials passes (best-of-$k$).
+- $\text{pass}^{k}$ — probability that all $k$ trials pass (worst-of-$k$).
 
-with bootstrap 95% confidence intervals and a metric-correlation matrix.
+with bootstrap 95% confidence intervals and a metric-correlation matrix. A trial *passes*
+when it clears the rubric's pass criterion — every stage by default, or reach ≥ a
+`pass_threshold` once the rubric uses partial-credit stages. See
+[Metrics](https://toolbench-ai.com/docs/reference/metrics/) for the exact estimators.
 
 ## Commands
 
@@ -86,6 +89,19 @@ with bootstrap 95% confidence intervals and a metric-correlation matrix.
 | `toolbench regrade`| Re-judge a finished run's preserved artifacts after a rubric change.  |
 
 Run `toolbench --help` (or `tbe --help`) for the full reference.
+
+## Also
+
+- **Runtimes** — besides the API-driven `orchestral` runtime, toolbench drives the
+  `claude_code` and `codex` CLIs directly (subscription auth, no API key), with per-turn
+  token accounting and a filesystem sandbox. Copy-paste starting points live in
+  [`harness_templates/`](harness_templates/).
+- **Judges** — grade with the deterministic rule judge (default) or add an LLM second
+  opinion (`--judge rule+llm`); the rule grade always stays authoritative. Any judge can be
+  applied after the fact with `toolbench regrade --judge …`.
+- **Safeguards** — trials that read the ground-truth answer key are quarantined
+  (`INTEGRITY_LEAK`, scored 0) so a leak can't inflate the headline; every trial also gets a
+  readable `audit.txt` of its full trajectory.
 
 ## License
 

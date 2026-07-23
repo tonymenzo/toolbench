@@ -61,8 +61,12 @@ the scaffolding?
 | **Variant**   | The prompt + sandbox seed (scaffolding), orthogonal to the tools. | `--variants`         |
 
 Grading uses a **rubric**, a set of ordered, weighted stages of checks. A trial's score is
-the prefix product. You only get credit for a stage if every stage before it also passed,
-so the score reflects *how far through the task the agent actually got*. See
+its weighted **reach**, *how far through the task the agent actually got*. In the common
+default case (every stage all-or-nothing and gating) this is exactly the **prefix product**:
+you only get credit for a stage if every stage before it also passed. Stages can also earn
+*partial* credit (`continuous`) or score *independently* of the ones before them
+(`gating: false`), so the prefix product is the default, not the only, shape. See
+[Metrics](reference/metrics.md) and
 [Reading results & scores](guides/reading-results.md).
 
 ## Where to go next

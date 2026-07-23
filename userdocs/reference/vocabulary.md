@@ -48,9 +48,30 @@ Variant
 
 Rubric
 :   The grading spec, a set of ordered, weighted **stages**, each a list of **checks**.
-    `type: stagewise` means the trial score is the prefix product, so a stage contributes
-    only if every earlier stage passed. See
-    [Rubrics & checks](../authoring/rubrics-and-checks.md).
+    `type: stagewise` means the trial score is its weighted **reach**: a stage banks its
+    weight only if it — and every *gating* stage before it — passed. With the default
+    binary + gating stages this is exactly the old prefix product. A rubric-level
+    `pass_threshold` can redefine when a trial "passes". See
+    [Metrics](metrics.md) and [Rubrics & checks](../authoring/rubrics-and-checks.md).
+
+Continuous stage / partial credit
+:   A stage marked `continuous: true` earns *partial* credit ∈ [0,1] (from a check's
+    `closeness` metric) instead of all-or-nothing, and stops gating later stages. Built-in
+    checks are binary and don't emit `closeness` yet, so `continuous` today behaves as a
+    non-gating binary stage — forward-looking, real partial credit lands once a custom
+    check returns a `closeness`.
+
+Gating
+:   Whether a stage **absorbs** the ones after it. A gating stage (the default) zeroes every
+    later stage if it fails, giving the pipeline "how far did the agent get" reading. A
+    `gating: false` stage contributes its own credit but blocks nothing — for rubrics whose
+    stages are independent quantities rather than a pipeline.
+
+pass_threshold
+:   A rubric-level float that redefines a "pass": a trial passes iff its reach ≥ the
+    threshold, instead of the default all-stages rule. A grading-time knob, so `regrade` can
+    change it without re-running. The manifest records the rule as `pass_criterion`
+    (`all_stages` or `reach>=<x>`).
 
 Check
 :   One pass/fail predicate evaluated against the sandbox after a trial (e.g.
@@ -58,6 +79,24 @@ Check
     check carries a *role*, either `presence` (did the deliverable get made?) or
     `correctness` (is it right?), which the runner uses for presence-gated nudges without
     leaking the answer.
+
+Judge / LLM judge
+:   How a trial is graded. The **rule** judge (deterministic checks) is always primary and
+    sets the score. A `rule+llm` (or, via `regrade`, `llm`) judge additionally asks a model
+    for an opinion, recorded in `alt_grades` — it never silently overrides the rule score.
+    The judge runs through its *own* harness/model (`judge:` block, or `--judge*` flags),
+    which may differ from the agent under test.
+
+Integrity leak / quarantine
+:   A trial whose tool-call inputs referenced the graded ground-truth answer key. The
+    integrity scan flags it, and the trial is **quarantined**: its `score` is set to `0`,
+    `failure_mode` becomes `INTEGRITY_LEAK`, and the original score is preserved as
+    `score_pre_integrity` (with `integrity_leak` / `integrity_evidence` on the row).
+
+UX-feedback turn
+:   One extra, **unscored** turn per trial (opt-in via `--ux-feedback` / `loop.ux_feedback`)
+    in which the agent critiques the tools it was given, written to `ux_feedback.md`. It
+    never affects the grade — pure tool-design signal.
 
 Trial
 :   One execution of a single `(benchmark, harness, loadout, variant, model, seed)` cell.
@@ -86,12 +125,12 @@ reach ($\bar R_k$)
     pipeline the agent gets*, on average. The headline metric.
 
 pass@k
-:   Probability that **at least one** of `k` trials passes every stage (best-of-k), the
-    optimistic "can it ever do it?" view.
+:   Probability that **at least one** of `k` trials passes — all stages by default, or reach ≥
+    `pass_threshold` when set — the optimistic "can it ever do it?" view (best-of-k).
 
 pass^k
-:   Probability that **all** `k` trials pass (worst-of-k), the pessimistic "can it do it
-    *reliably*?" view.
+:   Probability that **all** `k` trials pass, under the same pass rule as pass@k, the
+    pessimistic "can it do it *reliably*?" view (worst-of-k).
 
 All three come with bootstrap 95% confidence intervals. They are discussed intuitively in
 [Reading results & scores](../guides/reading-results.md) and defined precisely in
