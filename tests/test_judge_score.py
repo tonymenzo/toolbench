@@ -81,5 +81,77 @@ class TestAbsorbingScore(unittest.TestCase):
         self.assertAlmostEqual(g.score, round(reach, 4))
 
 
+class TestNonGatingStages(unittest.TestCase):
+    """`gating: false` — stages that are independent, not a pipeline.
+
+    Absorption models "stage N presupposes stage N-1". A rubric whose
+    stages are separate quantities (three widths in one task) has no
+    such dependency, and absorbing there silently zeroes correct work.
+    `gating: false` says so without also claiming the partial credit
+    that `continuous: true` implies but these binary checks never emit.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.sb = Path(self._tmp.name)
+        self.judge = RuleJudge()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _pass_stage(self, i):
+        (self.sb / f"out{i}.json").write_text(json.dumps({"v": 1}))
+
+    def _rubric_nongating(self, weights=(0.2, 0.3, 0.5)):
+        r = _rubric(weights)
+        for s in r.stages[1:]:          # s0 stays the gate (a prerequisite)
+            s["gating"] = False
+        return r
+
+    def test_failure_does_not_zero_independent_later_stages(self):
+        # s1 fails; s0 and s2 pass. Absorbing would score 0.2; here the
+        # independent s2 keeps its weight.
+        self._pass_stage(0)
+        self._pass_stage(2)
+        g = self.judge.grade(Trajectory(), self._rubric_nongating(), str(self.sb))
+        self.assertAlmostEqual(g.score, 0.7)     # 0.2 + 0.5
+
+    def test_credit_stays_binary(self):
+        # Non-gating must not imply partial credit: a failed stage
+        # contributes exactly 0, not some closeness.
+        self._pass_stage(0)
+        g = self.judge.grade(Trajectory(), self._rubric_nongating(), str(self.sb))
+        self.assertAlmostEqual(g.score, 0.2)
+        by_id = {s.id: s for s in g.stage_grades}
+        self.assertEqual(by_id["s1"].credit, 0.0)
+        self.assertFalse(by_id["s1"].continuous)
+        self.assertFalse(by_id["s1"].gates)
+        self.assertTrue(by_id["s0"].gates)
+
+    def test_gate_still_absorbs(self):
+        # s0 is the declared gate: its failure zeroes everything, even
+        # though the later stages are non-gating.
+        self._pass_stage(1)
+        self._pass_stage(2)
+        g = self.judge.grade(Trajectory(), self._rubric_nongating(), str(self.sb))
+        self.assertEqual(g.score, 0.0)
+
+    def test_default_is_unchanged(self):
+        # A rubric that sets neither key keeps the original prefix product.
+        self._pass_stage(0)
+        self._pass_stage(2)
+        g = self.judge.grade(Trajectory(), _rubric(), str(self.sb))
+        self.assertAlmostEqual(g.score, 0.2)
+        self.assertTrue(all(s.gates for s in g.stage_grades))
+
+    def test_continuous_still_implies_non_gating(self):
+        r = _rubric()
+        r.stages[1]["continuous"] = True
+        self._pass_stage(0)
+        self._pass_stage(2)
+        g = self.judge.grade(Trajectory(), r, str(self.sb))
+        self.assertAlmostEqual(g.score, 0.7)
+
+
 if __name__ == "__main__":
     unittest.main()

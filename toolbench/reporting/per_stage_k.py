@@ -45,6 +45,7 @@ from toolbench.core.metrics import (
     pass_at_k, pass_caret_k, reach_at_k, reach_caret_k,
 )
 from toolbench.reporting._shared import (
+    binary_stage_matrix_from_rows, gating_from_rows,
     short_model_name, stage_matrix_from_rows, subplot_grid,
 )
 from toolbench.reporting._output import save_figure, write_figure_data
@@ -177,11 +178,16 @@ def _plot_cell(ax, cell: dict, rows: list[dict], *,
     n = len(rows)
     N = len(canonical)
 
-    stage_matrix = stage_matrix_from_rows(rows, canonical)
+    stage_matrix = stage_matrix_from_rows(rows, canonical)          # graded credit
+    gating = gating_from_rows(rows, canonical)
+    binary_matrix = binary_stage_matrix_from_rows(rows, canonical)  # absorbing counts
 
-    # c_i = number of trials that reached stage i (absorbing convention).
+    # c_i = number of trials that reached stage i (absorbing convention). This is
+    # a binary "did the trial pass every stage up to i" count, so it reads the
+    # binary matrix, not the continuous credits (a credit of 0.87 is truthy and
+    # would spuriously count as reached).
     c_per_stage: list[int] = [0] * N
-    for row in stage_matrix:
+    for row in binary_matrix:
         reached_so_far = True
         for i, s in enumerate(row):
             if reached_so_far and s:
@@ -200,8 +206,8 @@ def _plot_cell(ax, cell: dict, rows: list[dict], *,
     # average over the per-stage curves shown). Drawn first, in bold
     # black with no markers, so the colored per-stage curves layer on
     # top and the integrated view reads as a baseline / envelope.
-    integ_at    = [reach_at_k(stage_matrix, k, weights=None)    for k in ks]
-    integ_caret = [reach_caret_k(stage_matrix, k, weights=None) for k in ks]
+    integ_at    = [reach_at_k(stage_matrix, k, weights=None, gating=gating)    for k in ks]
+    integ_caret = [reach_caret_k(stage_matrix, k, weights=None, gating=gating) for k in ks]
     ax.plot(ks, integ_at,
             color="black", linewidth=2.6, alpha=0.85,
             zorder=5, label=r"$R_{@k}$  (integrated, eq-w)")

@@ -37,6 +37,7 @@ from toolbench.core.metrics import (
     reach_at_k, reach_caret_k,
 )
 from toolbench.reporting._shared import (
+    gating_from_rows, pass_count_from_rows,
     short_model_name, stage_matrix_from_rows, subplot_grid,
 )
 from toolbench.reporting._output import save_figure, write_figure_data
@@ -80,6 +81,7 @@ def render_k_sweep(summary: dict, trials: list[dict], manifest: dict,
         by_cell.setdefault((t["model"], t["condition"]), []).append(t)
 
     rw = manifest.get("reach_weights") or {}
+    pass_threshold = rw.get("pass_threshold")
     stage_order = rw.get("stage_order")
     weights     = rw.get("w")
 
@@ -95,7 +97,8 @@ def render_k_sweep(summary: dict, trials: list[dict], manifest: dict,
     for ax, cell in zip(axes_flat, cells):
         rows = by_cell.get((cell.get("model"), cell.get("condition")), [])
         cell_data = _plot_cell(ax, cell, rows,
-                               stage_order=stage_order, weights=weights)
+                               stage_order=stage_order, weights=weights,
+                               pass_threshold=pass_threshold)
         if cell_data is not None:
             series_by_cell.append(cell_data)
 
@@ -133,7 +136,8 @@ def render_k_sweep(summary: dict, trials: list[dict], manifest: dict,
 
 def _plot_cell(ax, cell: dict, rows: list[dict], *,
                stage_order: list[str] | None,
-               weights: list[float] | None) -> dict | None:
+               weights: list[float] | None,
+               pass_threshold: float | None = None) -> dict | None:
     """Draw one panel: 4 curves + 2 bands + the reach_bar baseline.
 
     Returns the exact series drawn (for the data sidecar), or `None`
@@ -147,7 +151,8 @@ def _plot_cell(ax, cell: dict, rows: list[dict], *,
         return None
 
     canonical = stage_order or list((rows[0].get("stages") or {}).keys())
-    stage_matrix = stage_matrix_from_rows(rows, canonical)
+    stage_matrix = stage_matrix_from_rows(rows, canonical)   # graded credit
+    gating = gating_from_rows(rows, canonical)               # binary vs continuous
 
     n = len(stage_matrix)
     if n == 0 or not canonical:
@@ -155,14 +160,16 @@ def _plot_cell(ax, cell: dict, rows: list[dict], *,
         ax.axis("off")
         return None
 
-    # Per-session reach + pass counts.
-    R = per_trial_reach(stage_matrix, weights) or [0.0] * n
-    c = sum(1 for row in stage_matrix if row and all(row))
+    # Reach uses the graded credit matrix with gating (continuous stages
+    # contribute partial credit); the pass family counts binary all-stages
+    # passes only, from the binary matrix (never the credits).
+    R = per_trial_reach(stage_matrix, weights, gating) or [0.0] * n
+    c = pass_count_from_rows(rows, pass_threshold)
     reach_bar = sum(R) / len(R)
 
     ks = list(range(1, n + 1))
-    reach_at_curve    = [reach_at_k(stage_matrix, k, weights)    for k in ks]
-    reach_caret_curve = [reach_caret_k(stage_matrix, k, weights) for k in ks]
+    reach_at_curve    = [reach_at_k(stage_matrix, k, weights, gating)    for k in ks]
+    reach_caret_curve = [reach_caret_k(stage_matrix, k, weights, gating) for k in ks]
     pass_at_curve     = [pass_at_k(n, c, k)                      for k in ks]
     pass_caret_curve  = [pass_caret_k(n, c, k)                   for k in ks]
 

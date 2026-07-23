@@ -17,7 +17,8 @@ central registry in this module by design.
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from .checks import BUILTIN_CHECKS, run_check
+from .checks import BUILTIN_CHECKS, run_check_full
+from .metrics import per_trial_reach
 from .failure_modes import NONE, UNKNOWN, incomplete_at
 from .task import Grade, Rubric, StageGrade
 from .trajectory import Trajectory
@@ -63,44 +64,65 @@ class RuleJudge(Judge):
             # The stage passes iff every check passes; `expected_tool_calls` is
             # recorded as a diagnostic only — it never affects the score, so a
             # loadout is judged on the artifacts it produced, not the tools used.
+            stage_metrics: dict = {}
             for entry in stage.get("checks") or []:
                 if not isinstance(entry, dict) or len(entry) != 1:
                     passed = False
                     evidence.append(f"malformed check entry: {entry!r}")
                     continue
                 (cname, cparams), = entry.items()
-                ok, msg = run_check(
+                ok, msg, cmetrics = run_check_full(
                     cname, base, cparams or {},
                     benchmark_dir=self.benchmark_dir, registry=self.registry,
                 )
                 evidence.append(f"{cname}: {msg}")
+                if cmetrics:
+                    # Continuous diagnostics (distance-to-reference, closeness,
+                    # ...) recorded alongside the binary pass — never affect the
+                    # score, which stays the prefix-product of `passed`.
+                    stage_metrics[cname] = cmetrics
                 if not ok:
                     passed = False
             for tname in stage.get("expected_tool_calls", []):
                 used = tname.lower() in called_tools
                 evidence.append(f"tool {'used' if used else 'unused'}: {tname}")
 
+            # A `continuous: true` stage contributes a partial [0,1] credit (the
+            # closeness a check recorded) instead of an all-or-nothing pass, and
+            # does not gate later stages. `passed` stays binary (for pass@k).
+            is_cont = bool(stage.get("continuous"))
+            # `gating:` is the explicit control; `continuous: true` keeps
+            # implying non-gating so existing rubrics are unchanged. Stated
+            # separately because a rubric of INDEPENDENT stages wants binary
+            # credit AND no gating — `continuous` alone cannot say that.
+            gates = bool(stage.get("gating", not is_cont))
+            if is_cont:
+                credit = next(
+                    (float(m["closeness"]) for m in stage_metrics.values()
+                     if isinstance(m, dict) and m.get("closeness") is not None),
+                    1.0 if passed else 0.0)
+            else:
+                credit = 1.0 if passed else 0.0
             stage_grades.append(StageGrade(
                 id=sid, passed=passed, weight=weight,
                 description=stage.get("description", ""),
                 evidence="; ".join(evidence),
+                metrics=stage_metrics,
+                continuous=is_cont, credit=credit, gates=gates,
             ))
             stages[sid] = passed
 
-        # Score follows the documented absorbing (prefix-product)
-        # convention, normalized to [0,1]: a stage contributes its weight
-        # only if it AND every earlier stage passed, so `score` is exactly
-        # the per-trial reach R_j that the aggregate reach metrics build
-        # on. (A plain sum of passed weights would credit stages reached
-        # after an earlier failure and disagree with reach.)
-        total_w = sum(s.weight for s in stage_grades)
-        cum = True
-        earned = 0.0
-        for s in stage_grades:
-            cum = cum and s.passed
-            if cum:
-                earned += s.weight
-        score = round(earned / total_w, 4) if total_w > 0 else 0.0
+        # Score = the per-trial reach R_j (normalized to [0,1]), computed via
+        # the shared `per_trial_reach`. A gating stage absorbs (a fail zeroes
+        # later contributions); a non-gating stage contributes its credit and
+        # lets the rest stand. `continuous` controls the credit (partial vs
+        # binary), `gating:` controls the absorption — they are independent.
+        # A rubric that sets neither reduces to the original prefix-product.
+        weights = [s.weight for s in stage_grades]
+        credit_row = [s.credit for s in stage_grades]
+        gating = [s.gates for s in stage_grades]
+        reach = per_trial_reach([credit_row], weights, gating)
+        score = round(reach[0], 4) if reach else 0.0
 
         if all(s.passed for s in stage_grades):
             failure_mode = NONE

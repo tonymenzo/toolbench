@@ -98,12 +98,16 @@ METRIC_TRIPLET_LABELS = ["reach_bar_k", "pass_at_k", "pass_caret_k"]
 class StageMatrix(NamedTuple):
     """Return shape of `_stage_matrix`.
 
-    `matrix[j][i]` is 1 iff trial `j` passed stage `i`. `weights` is
-    the rubric weight vector aligned to the same column order, or
-    `None` when equal weights should be used.
+    `matrix[j][i]` is trial `j`'s credit for stage `i` (1/0 for binary
+    stages, a [0,1] closeness for `continuous` stages). `weights` is the
+    rubric weight vector aligned to the same column order, or `None` for
+    equal weights. `gating[i]` is False for a continuous stage (contributes
+    its credit without absorbing later stages) — passed to the reach
+    estimators; `None` means all-gating (the binary prefix-product).
     """
-    matrix:  list[list[int]]
+    matrix:  list[list[float]]
     weights: list[float] | None
+    gating:  list[bool] | None = None
 
 
 class MetricCorrelations(TypedDict):
@@ -171,8 +175,16 @@ class AggregateResult(TypedDict):
     n_total_trials:  int
 
 
-def _trial_passed(row: dict) -> int:
-    """Boundary-case end-to-end success: every rubric stage passed."""
+def _trial_passed(row: dict, pass_threshold: float | None = None) -> int:
+    """Did this trial "pass", for pass@k / pass^k?
+
+    `pass_threshold is None` -> binary all-stages criterion: every rubric stage
+    passed (correct for binary-only rubrics). A float -> the trial passes iff its
+    per-trial reach R_j (== the row's `score`) is >= the threshold. The latter is
+    the meaningful definition once continuous stages exist, since all-stages is
+    then almost never satisfied."""
+    if pass_threshold is not None:
+        return 1 if float(row.get("score") or 0.0) >= pass_threshold else 0
     stages = row.get("stages") or {}
     return 1 if stages and all(stages.values()) else 0
 
@@ -435,10 +447,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         "versions": {"orchestral-ai": _pkg_version("orchestral-ai"),
                      "toolbench": _pkg_version("toolbench")},
         "rubric_total_weight": round(benchmark.rubric.total_weight(), 4),
-        "pass_criterion": "all_stages",
+        "pass_criterion": ("all_stages"
+                           if benchmark.rubric.pass_threshold is None
+                           else f"reach>={benchmark.rubric.pass_threshold:g}"),
         "reach_weights": {
             "stage_order": stage_order,
             "w": [stage_weights[sid] for sid in stage_order],
+            "pass_threshold": benchmark.rubric.pass_threshold,
         },
         "litellm_pricing": litellm_pricing,
     }
@@ -706,6 +721,14 @@ def cmd_regrade(args: argparse.Namespace) -> int:
 
         new_row = dict(row)
         new_row["stages"] = new_stages
+        new_row["stage_credits"] = {s.id: s.credit for s in grade.stage_grades}
+        new_row["stage_continuous"] = {s.id: s.continuous
+                                       for s in grade.stage_grades}
+        new_row["stage_distance"] = {s.id: _stage_distance(s)[0]
+                                     for s in grade.stage_grades}
+        new_row["stage_distance_label"] = {
+            s.id: _stage_distance(s)[1]
+            for s in grade.stage_grades if _stage_distance(s)[1]}
         new_row["score"] = new_score
         new_row["ok"] = new_score > 0
         new_row["failure_mode"] = failure_mode
@@ -722,6 +745,15 @@ def cmd_regrade(args: argparse.Namespace) -> int:
     with open(trials_path, "w") as f:
         for r in new_rows:
             f.write(json.dumps(r, default=str) + "\n")
+
+    # Refresh the pass criterion from the current benchmark so a regrade honors
+    # a changed `rubric.pass_threshold` (the whole point of "regrade against a
+    # new threshold"). Reach weights/order are already fixed by the run.
+    pt = benchmark.rubric.pass_threshold
+    manifest.setdefault("reach_weights", {})["pass_threshold"] = pt
+    manifest["pass_criterion"] = ("all_stages" if pt is None
+                                  else f"reach>={pt:g}")
+    write_json(manifest_path, manifest)
 
     # Re-aggregate summary + plots.
     print()
@@ -863,6 +895,16 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
             "ok": result.ok,
             "score": result.score,
             "stages": result.grade.stages,
+            "stage_credits": {s.id: s.credit
+                              for s in result.grade.stage_grades},
+            "stage_continuous": {s.id: s.continuous
+                                 for s in result.grade.stage_grades},
+            "stage_distance": {s.id: _stage_distance(s)[0]
+                               for s in result.grade.stage_grades},
+            "stage_distance_label": {
+                s.id: _stage_distance(s)[1]
+                for s in result.grade.stage_grades
+                if _stage_distance(s)[1]},
             "wall_clock_s": round(result.wall_clock_s, 2),
             "input_tokens": result.trajectory.tokens.get("input", 0),
             "output_tokens": result.trajectory.tokens.get("output", 0),
@@ -907,11 +949,13 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
                   stage_order, stage_weights, aborted) -> None:
     """Re-aggregate from the full trial set, write summary.json + summary.txt,
     and print the rendered summary."""
+    pass_threshold = (manifest.get("reach_weights") or {}).get("pass_threshold")
     summary = aggregate(all_trial_records, k=k,
-                        stage_order=stage_order, stage_weights=stage_weights)
+                        stage_order=stage_order, stage_weights=stage_weights,
+                        pass_threshold=pass_threshold)
     summary["run_id"] = manifest.get("run_id", run_dir.name)
     summary["k"] = k
-    summary["pass_criterion"] = "all_stages"
+    summary["pass_criterion"] = manifest.get("pass_criterion", "all_stages")
     summary["reach_weights"] = manifest.get("reach_weights", {})
     summary["total_spent_usd"] = round(budget.spent, 6)
     summary["aborted_by_budget"] = aborted
@@ -946,7 +990,8 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
 
 def aggregate(trials: list[dict], k: int,
               stage_order: list[str] | None = None,
-              stage_weights: dict[str, float] | None = None
+              stage_weights: dict[str, float] | None = None,
+              pass_threshold: float | None = None
               ) -> AggregateResult:
     """Aggregate trial rows into per-cell metrics.
 
@@ -974,16 +1019,18 @@ def aggregate(trials: list[dict], k: int,
     cell_summaries = []
     for (model, cond), rows in cells.items():
         scores = [r["score"] for r in rows]
-        passes = [_trial_passed(r) for r in rows]
+        passes = [_trial_passed(r, pass_threshold) for r in rows]
         n = len(rows)
         c = sum(passes)
         costs = [r["cost_usd"] for r in rows if r["cost_usd"] is not None]
         wallclocks = [r["wall_clock_s"] for r in rows]
         score_mean, score_lo, score_hi = bootstrap_ci(scores)
-        stage_matrix, w = _stage_matrix(rows, stage_order, stage_weights)
-        reach_mean = reach_bar_k(stage_matrix, weights=w) if stage_matrix else 0.0
-        corr = _bootstrap_metric_corr(rows, stage_matrix, k, weights=w)
-        reach_lo, reach_hi = _reach_ci(stage_matrix, weights=w)
+        _sm = _stage_matrix(rows, stage_order, stage_weights)
+        stage_matrix, w, gating = _sm.matrix, _sm.weights, _sm.gating
+        reach_mean = reach_bar_k(stage_matrix, weights=w, gating=gating) if stage_matrix else 0.0
+        corr = _bootstrap_metric_corr(rows, stage_matrix, k, weights=w, gating=gating,
+                                      pass_threshold=pass_threshold)
+        reach_lo, reach_hi = _reach_ci(stage_matrix, weights=w, gating=gating)
         # Equal-weighted reach family: same absorbing semantics, no
         # rubric weights. Lets readers interpret "depth of pipeline
         # reached" without having to know the headline-stage weight.
@@ -992,12 +1039,12 @@ def aggregate(trials: list[dict], k: int,
         # bar_k_uniform, the rest live in summary.json for downstream
         # plots/analysis.
         if stage_matrix:
-            reach_bar_k_uniform   = reach_bar_k(stage_matrix, weights=None)
-            reach_at_k_uniform    = reach_at_k(stage_matrix, min(k, n), weights=None)
-            reach_caret_k_uniform = reach_caret_k(stage_matrix, min(k, n), weights=None)
+            reach_bar_k_uniform   = reach_bar_k(stage_matrix, weights=None, gating=gating)
+            reach_at_k_uniform    = reach_at_k(stage_matrix, min(k, n), weights=None, gating=gating)
+            reach_caret_k_uniform = reach_caret_k(stage_matrix, min(k, n), weights=None, gating=gating)
         else:
             reach_bar_k_uniform = reach_at_k_uniform = reach_caret_k_uniform = 0.0
-        reach_u_lo, reach_u_hi = _reach_ci(stage_matrix, weights=None)
+        reach_u_lo, reach_u_hi = _reach_ci(stage_matrix, weights=None, gating=gating)
         cell_summaries.append({
             "model": model,
             "condition": cond,
@@ -1024,18 +1071,39 @@ def aggregate(trials: list[dict], k: int,
             "mean_cost_usd": round(mean(costs), 6) if costs else None,
             "mean_wall_clock_s": round(mean(wallclocks), 2) if wallclocks else 0.0,
             "stages": _stages_breakdown(rows),
+            "stage_display": _stages_continuous_breakdown(rows),
             "failure_modes": _count_failures(rows),
+            # Individual per-trial reaches (sorted), so the summary can show the
+            # spread the cell mean hides (a "capable but flaky" cell reads very
+            # differently from a uniform one at the same mean).
+            "trial_scores": sorted(round(float(s), 4) for s in scores),
+            "pass_threshold": pass_threshold,
+            # Reliability rollup: resume/retry counts across the cell's trials.
+            "retries": {
+                "rate_limit": sum(int(r.get("rate_limit_retries", 0) or 0)
+                                  for r in rows),
+                "transient": sum(int(r.get("transient_retries", 0) or 0)
+                                 for r in rows),
+                "nudges": sum(int(r.get("nudges", 0) or 0) for r in rows),
+            },
+            # tool_usage (per-tool call/error counts + adoption) and ux_ratings
+            # are attached post-hoc from the trial transcripts / trial.json in
+            # _finalize_run, which has the run_dir; the row's tool_calls field is
+            # None for CLI runtimes (claude_code), so the transcript is the
+            # authoritative source.
         })
     return {
         "cells": cell_summaries,
-        "paired_deltas": _paired_deltas(trials, stage_order, stage_weights),
+        "paired_deltas": _paired_deltas(trials, stage_order, stage_weights,
+                                        pass_threshold),
         "n_total_trials": len(trials),
     }
 
 
 def _paired_deltas(trials: list[dict],
                    stage_order: list[str] | None = None,
-                   stage_weights: dict[str, float] | None = None
+                   stage_weights: dict[str, float] | None = None,
+                   pass_threshold: float | None = None
                    ) -> list[dict]:
     """Paired per-seed condition deltas, per model.
 
@@ -1074,7 +1142,7 @@ def _paired_deltas(trials: list[dict],
             cond_order.append(cond)
         reach = _row_reach(t.get("stages") or {}, stage_order, weights)
         by_model.setdefault(t["model"], {}).setdefault(cond, {}) \
-                .setdefault(seed, []).append((reach, _trial_passed(t)))
+                .setdefault(seed, []).append((reach, _trial_passed(t, pass_threshold)))
 
     def _avg(vals: list[tuple[float, int]], idx: int) -> float:
         return sum(v[idx] for v in vals) / len(vals)
@@ -1135,15 +1203,24 @@ def _stage_matrix(rows: list[dict],
                 canonical = list(s.keys())
                 break
     if canonical is None:
-        return StageMatrix(matrix=[], weights=None)
+        return StageMatrix(matrix=[], weights=None, gating=None)
     matrix = stage_matrix_from_rows(rows, canonical)
     w = ([stage_weights.get(sid, 0.0) for sid in canonical]
          if stage_weights is not None else None)
-    return StageMatrix(matrix=matrix, weights=w)
+    # Gating mask from any row's stage_continuous map: a `continuous` stage does
+    # not gate. None (all-gating) when no row records it (legacy binary rubric).
+    cont = {}
+    for r in rows:
+        cont.update(r.get("stage_continuous") or {})
+    gating = ([not bool(cont.get(sid, False)) for sid in canonical]
+              if cont else None)
+    return StageMatrix(matrix=matrix, weights=w, gating=gating)
 
 
-def _bootstrap_metric_corr(rows: list[dict], stage_matrix: list[list[int]],
-                           k: int, weights: list[float] | None = None
+def _bootstrap_metric_corr(rows: list[dict], stage_matrix: list[list[float]],
+                           k: int, weights: list[float] | None = None,
+                           gating: list[bool] | None = None,
+                           pass_threshold: float | None = None
                            ) -> list[list[float | None]]:
     """Bootstrap-resample trials and compute the three-vector
     (reach_bar_k, pass@k, pass^k) correlation matrix across resamples.
@@ -1159,19 +1236,20 @@ def _bootstrap_metric_corr(rows: list[dict], stage_matrix: list[list[int]],
     boot_vectors: list[tuple[float, float, float]] = []
     for _ in range(N_BOOTSTRAP_CORR):
         idx = [rng.randrange(n) for _ in range(n)]
-        sample_passes = [_trial_passed(rows[i]) for i in idx]
+        sample_passes = [_trial_passed(rows[i], pass_threshold) for i in idx]
         c_b = sum(sample_passes)
         p_at_k = pass_at_k(n, c_b, min(k, n))
         p_caret_k = pass_caret_k(n, c_b, min(k, n))
         sample_stages = [stage_matrix[i] for i in idx]
-        p_reach = reach_bar_k(sample_stages, weights=weights)
+        p_reach = reach_bar_k(sample_stages, weights=weights, gating=gating)
         boot_vectors.append((p_reach, p_at_k, p_caret_k))
     return pearson_corr_matrix(boot_vectors)
 
 
-def _reach_ci(stage_matrix: list[list[int]],
+def _reach_ci(stage_matrix: list[list[float]],
               weights: list[float] | None = None,
-              n_bootstrap: int = 1000, seed: int = 0xBEEF
+              n_bootstrap: int = 1000, seed: int = 0xBEEF,
+              gating: list[bool] | None = None
               ) -> tuple[float, float]:
     """Bootstrap 95% CI for reach_bar_k over the row dimension."""
     if not stage_matrix:
@@ -1181,7 +1259,7 @@ def _reach_ci(stage_matrix: list[list[int]],
     samples = []
     for _ in range(n_bootstrap):
         idx = [rng.randrange(n) for _ in range(n)]
-        samples.append(reach_bar_k([stage_matrix[i] for i in idx], weights=weights))
+        samples.append(reach_bar_k([stage_matrix[i] for i in idx], weights=weights, gating=gating))
     samples.sort()
     lo = samples[int(n_bootstrap * 0.025)]
     hi = samples[int(n_bootstrap * 0.975) - 1]
@@ -1195,6 +1273,18 @@ def _round_corr(corr: list[list[float | None]]) -> list[list[float | None]]:
     ]
 
 
+def _stage_distance(sg) -> tuple:
+    """(distance, distance_label) for a StageGrade, or (None, None).
+
+    A stage's `metrics` is keyed by CHECK name ({check: {distance, closeness,
+    ...}}), so pull the first check that recorded a `distance` — mirroring how
+    the judge reads `closeness` for the credit."""
+    for m in (getattr(sg, "metrics", None) or {}).values():
+        if isinstance(m, dict) and m.get("distance") is not None:
+            return m.get("distance"), m.get("distance_label")
+    return None, None
+
+
 def _stages_breakdown(rows: list[dict]) -> dict:
     if not rows or not rows[0].get("stages"):
         return {}
@@ -1203,6 +1293,37 @@ def _stages_breakdown(rows: list[dict]) -> dict:
         sk: round(sum(1 for r in rows if r["stages"].get(sk)) / len(rows), 4)
         for sk in keys
     }
+
+
+def _stages_continuous_breakdown(rows: list[dict]) -> dict:
+    """Per-stage continuous diagnostics for the summary display, keyed by stage
+    id: {continuous, credit_mean, distance_mean, distance_label}. Binary stages
+    get continuous=False and are shown as plain pass counts; continuous stages
+    additionally surface the mean [0,1] credit and the mean raw distance-to-
+    reference (with its label) that the credit is derived from. All fields are
+    best-effort — a run with no continuous stages yields all-binary entries and
+    the renderer falls back to the binary pass line, so this stays fully
+    backward compatible with binary-only rubrics."""
+    if not rows or not rows[0].get("stages"):
+        return {}
+    keys = list(rows[0]["stages"].keys())
+    out: dict = {}
+    for sk in keys:
+        cont = any((r.get("stage_continuous") or {}).get(sk) for r in rows)
+        creds = [(r.get("stage_credits") or {}).get(sk) for r in rows]
+        creds = [c for c in creds if isinstance(c, (int, float))]
+        dists = [(r.get("stage_distance") or {}).get(sk) for r in rows]
+        dists = [d for d in dists if isinstance(d, (int, float))]
+        label = next((lbl for r in rows
+                      if (lbl := (r.get("stage_distance_label") or {}).get(sk))),
+                     None)
+        out[sk] = {
+            "continuous": bool(cont),
+            "credit_mean": round(sum(creds) / len(creds), 4) if creds else None,
+            "distance_mean": round(sum(dists) / len(dists), 4) if dists else None,
+            "distance_label": label,
+        }
+    return out
 
 
 def _count_failures(rows: list[dict]) -> dict[str, int]:

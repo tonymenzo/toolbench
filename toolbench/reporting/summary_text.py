@@ -124,11 +124,16 @@ def _render_three_vector(cell: dict) -> list[str]:
     for label, key, annotation in _TRIPLET:
         v = float(cell.get(key, 0.0) or 0.0)
         out.append(f"      {label:<13} {v:.2f}         {annotation}")
+    pt = cell.get("pass_threshold")
+    crit = f"reach >= {pt:g}" if isinstance(pt, (int, float)) else "all stages pass"
+    out.append("")
+    out.append(f"      pass criterion: a trial passes iff {crit}")
     return out
 
 
 def _render_stages(cell: dict) -> list[str]:
     stages = cell.get("stages") or {}
+    disp = cell.get("stage_display") or {}
     n = max(int(cell.get("n", 0)), 1)
     out = [*_section_title("STAGES"), ""]
     if not stages:
@@ -137,7 +142,23 @@ def _render_stages(cell: dict) -> list[str]:
     longest = max(len(sid) for sid in stages)
     for sid, rate in stages.items():
         passed = int(round(rate * n))
-        out.append(f"      {sid:<{longest}}     {passed}/{n}       {rate:.2f}")
+        d = disp.get(sid) or {}
+        # Binary stages: pass count + rate, as before. Continuous stages: the
+        # same binary pass count PLUS the mean [0,1] credit that entered the
+        # score and the mean raw distance-to-reference it came from. The switch
+        # is purely `continuous`, so binary-only rubrics render unchanged.
+        if d.get("continuous"):
+            cred = d.get("credit_mean")
+            dist = d.get("distance_mean")
+            lbl = d.get("distance_label") or ""
+            cred_s = f"credit {cred:.2f}" if isinstance(cred, (int, float)) else "credit   - "
+            dist_s = (f"dist {dist:.3f} {lbl}".rstrip()
+                      if isinstance(dist, (int, float)) else "dist   -")
+            out.append(f"      {sid:<{longest}}     {passed}/{n}  {cred_s}   "
+                       f"{dist_s}")
+        else:
+            out.append(
+                f"      {sid:<{longest}}     {passed}/{n}       {rate:.2f}")
     return out
 
 

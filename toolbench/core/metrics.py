@@ -118,8 +118,9 @@ def pass_caret_k(n: int, c: int, k: int) -> float:
     return math.comb(c, k) / math.comb(n, k)
 
 
-def per_trial_reach(stage_matrix: Sequence[Sequence[int]],
-                    weights: Sequence[float] | None = None) -> list[float]:
+def per_trial_reach(stage_matrix: Sequence[Sequence[float]],
+                    weights: Sequence[float] | None = None,
+                    gating: Sequence[bool] | None = None) -> list[float]:
     """Per-trial reach values R_j ∈ [0,1].
 
     R_j = (1/W) * sum_i w_i * prod_{l<=i} S[j, l]. Cumulative product
@@ -145,17 +146,28 @@ def per_trial_reach(stage_matrix: Sequence[Sequence[int]],
         return []
     out: list[float] = []
     for row in rows:
-        cum = 1
+        cum = 1.0
         r_session = 0.0
         for i, s in enumerate(row):
-            cum = cum if s else 0
-            r_session += cum * w[i]
+            gate = True if gating is None else bool(gating[i])
+            if gate:
+                # Absorbing gate: `s` is a 0/1 pass; a fail zeros all later
+                # contributions (the documented prefix-product convention).
+                cum = cum if s else 0
+                r_session += cum * w[i]
+            else:
+                # Non-gating continuous stage: contribute its partial credit
+                # `s` in [0,1] scaled by the current gate, WITHOUT absorbing the
+                # stages after it (so a strict-but-secondary check no longer
+                # zeroes the reach bands it precedes).
+                r_session += cum * float(s) * w[i]
         out.append(r_session / total_w)
     return out
 
 
-def reach_bar_k(stage_matrix: Sequence[Sequence[int]],
-                weights: Sequence[float] | None = None) -> float:
+def reach_bar_k(stage_matrix: Sequence[Sequence[float]],
+                weights: Sequence[float] | None = None,
+                gating: Sequence[bool] | None = None) -> float:
     """Mean-of-k for partial-credit M_j = R_j: R̄_k = E[(1/k) Σ R_j].
 
     Unbiased estimator: the sample mean of `per_trial_reach`. The
@@ -164,14 +176,15 @@ def reach_bar_k(stage_matrix: Sequence[Sequence[int]],
 
     Returns 0.0 if there are no per-trial reaches.
     """
-    R = per_trial_reach(stage_matrix, weights)
+    R = per_trial_reach(stage_matrix, weights, gating)
     if not R:
         return 0.0
     return sum(R) / len(R)
 
 
-def reach_at_k(stage_matrix: Sequence[Sequence[int]], k: int,
-               weights: Sequence[float] | None = None) -> float:
+def reach_at_k(stage_matrix: Sequence[Sequence[float]], k: int,
+               weights: Sequence[float] | None = None,
+               gating: Sequence[bool] | None = None) -> float:
     """Best-of-k for partial-credit M_j = R_j: M_@k = E[max_j R_j].
 
     Sorts per-trial reaches R_(1) <= ... <= R_(n) and returns
@@ -180,7 +193,7 @@ def reach_at_k(stage_matrix: Sequence[Sequence[int]], k: int,
     size-k subset of the n observations. Collapses to `pass_at_k`
     when R_j is binary. See the accompanying manuscript §3a.
     """
-    R = per_trial_reach(stage_matrix, weights)
+    R = per_trial_reach(stage_matrix, weights, gating)
     if not R:
         return 0.0
     n = len(R)
@@ -194,8 +207,9 @@ def reach_at_k(stage_matrix: Sequence[Sequence[int]], k: int,
     return out
 
 
-def reach_caret_k(stage_matrix: Sequence[Sequence[int]], k: int,
-                  weights: Sequence[float] | None = None) -> float:
+def reach_caret_k(stage_matrix: Sequence[Sequence[float]], k: int,
+                  weights: Sequence[float] | None = None,
+                  gating: Sequence[bool] | None = None) -> float:
     """Worst-of-k for partial-credit M_j = R_j: M^k = E[min_j R_j].
 
     Symmetric dual of `reach_at_k`: weight on R_(i) is
@@ -203,7 +217,7 @@ def reach_caret_k(stage_matrix: Sequence[Sequence[int]], k: int,
     uniformly random size-k subset. Collapses to `pass_caret_k` on
     binary R. See the accompanying manuscript §3a.
     """
-    R = per_trial_reach(stage_matrix, weights)
+    R = per_trial_reach(stage_matrix, weights, gating)
     if not R:
         return 0.0
     n = len(R)
