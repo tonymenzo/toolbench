@@ -73,6 +73,15 @@ SUBSCRIPTION_API_EQUIVALENT_PRICING: dict[tuple[str, str], dict[str, float | int
         "long_output_multiplier": 1.5,
         "source": "https://developers.openai.com/api/docs/models/gpt-5.5",
     },
+    ("openai", "gpt-5.6-sol"): {
+        "input": 5.00,
+        "cached_input": 0.50,
+        "output": 30.00,
+        "long_context_threshold": 272_000,
+        "long_input_multiplier": 2.0,
+        "long_output_multiplier": 1.5,
+        "source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    },
 }
 
 

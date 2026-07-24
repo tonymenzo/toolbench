@@ -4,7 +4,7 @@ from pathlib import Path
 
 from toolbench.core.harness import Harness
 from toolbench.core.llm_factory import SubscriptionLLM
-from toolbench.core.runtime import CodexAgent, _codex_factory
+from toolbench.core.runtime import CodexAgent, _codex_factory, _toolbase_command
 
 
 def _agent(tmp_path: Path, **kw) -> CodexAgent:
@@ -27,6 +27,12 @@ def test_toolbase_mcp_is_auto_approved_for_noninteractive_exec(tmp_path):
     a = _agent(tmp_path, profile="hep-symb")
     args = a._mcp_config_args()
     assert any("default_tools_approval_mode=\"approve\"" in x for x in args)
+
+
+def test_toolbase_mcp_command_resolves_to_an_executable():
+    command = Path(_toolbase_command())
+    assert command.is_absolute()
+    assert command.is_file()
 
 
 def test_resume_uses_only_resume_supported_flags(tmp_path):

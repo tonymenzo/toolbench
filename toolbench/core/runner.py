@@ -19,6 +19,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
 from orchestral.tools.hooks import TruncateOutputHook
 
 from .artifact_policy import DEFAULT_POLICY, ArtifactPolicy
@@ -65,6 +66,42 @@ _PROVIDER_CONTROL_KEYS = ("name", "cache_bust")
 # lost at cleanup. We lift them out of the trajectory into
 # artifacts/scripts/.
 CODE_ARG_KEYS = ("code", "script", "source", "program")
+
+
+def _toolbase_protected_paths() -> list[str]:
+    """Paths a benchmark agent must not inspect outside the MCP interface.
+
+    Toolbase may serve editable toolkit checkouts. A CLI agent with ordinary
+    filesystem read access could otherwise locate and import those exact tool
+    implementations in a ``core_only`` arm, contaminating the control. MCP
+    server children are not confined by Codex/Claude's shell filesystem
+    profile, so denying these paths to the agent does not prevent the declared
+    Toolbase loadout from executing them.
+    """
+    root = Path(os.environ.get("TOOLBASE_HOME", Path.home() / ".toolbase")).resolve()
+    protected = [str(root)]
+    for meta_path in root.glob("cache/*/*/.install_meta.yaml"):
+        try:
+            meta = yaml.safe_load(meta_path.read_text()) or {}
+            source = meta.get("source_path") if meta.get("editable") else None
+            if source:
+                protected.append(str(Path(source).expanduser().resolve()))
+        except Exception:
+            continue
+    # Toolkit runtime configs can point at persistent working/data directories.
+    # Those may contain outputs from earlier tool-assisted runs and are equally
+    # inappropriate inputs to a fresh or core-only benchmark trial.
+    for config_path in root.glob("config/*.yaml"):
+        try:
+            config = yaml.safe_load(config_path.read_text()) or {}
+            base_directory = config.get("base_directory")
+            if base_directory:
+                protected.append(
+                    str(Path(base_directory).expanduser().resolve())
+                )
+        except Exception:
+            continue
+    return list(dict.fromkeys(protected))
 
 
 def _warn(prefix: str, exc: BaseException) -> None:
@@ -452,8 +489,11 @@ class TrialRunner:
                     # The benchmark tree holds the ground-truth answer key
                     # (soln/); the Bash sandbox (if the harness enables it)
                     # deny-reads these so a trial cannot reach it.
-                    protected_paths=(benchmark_dir if isinstance(benchmark_dir, list)
-                                     else [benchmark_dir]) if benchmark_dir else [],
+                    protected_paths=(
+                        ((benchmark_dir if isinstance(benchmark_dir, list)
+                          else [benchmark_dir]) if benchmark_dir else [])
+                        + _toolbase_protected_paths()
+                    ),
                 )
                 # One resume loop over the SAME agent / sandbox / context.
                 # After each agent.run we either:

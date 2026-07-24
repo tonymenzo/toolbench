@@ -185,6 +185,24 @@ register_runtime("orchestral", _orchestral_factory, dist="orchestral-ai")
 
 # The MCP server name `tb connect claude-code` writes into .mcp.json.
 _TOOLBASE_MCP_SERVER = "toolbase"
+
+
+def _toolbase_command() -> str:
+    """Resolve the Toolbase executable for child MCP processes.
+
+    Invoking Toolbench with an absolute virtual-environment Python does not
+    activate that environment or prepend its ``bin`` directory to ``PATH``.
+    Prefer PATH when available, then the executable beside the running Python;
+    retain the bare command only as a final fallback so Codex/Claude can report
+    a normal MCP startup error.
+    """
+    found = shutil.which("toolbase")
+    if found:
+        return found
+    sibling = Path(sys.executable).resolve().with_name("toolbase")
+    if sibling.is_file():
+        return str(sibling)
+    return "toolbase"
 # No hardcoded toolkit: the MCP profile a CLI runtime serves is derived from the
 # benchmark's loadout (its `toolbase: {profile: ...}` source) via
 # `_loadout_toolbase_profile`. None => serve no MCP server (the `core` baseline
@@ -323,7 +341,7 @@ class ClaudeCodeAgent:
             "mcpServers": {
                 _TOOLBASE_MCP_SERVER: {
                     "type": "stdio",
-                    "command": "toolbase",
+                    "command": _toolbase_command(),
                     "args": args,
                 }
             }
@@ -728,7 +746,7 @@ class CodexAgent:
                       "--call-timeout", str(self.call_timeout_s)]
         return [
             "-c", f"mcp_servers.{_TOOLBASE_MCP_SERVER}.command="
-                  + json.dumps("toolbase"),
+                  + json.dumps(_toolbase_command()),
             "-c", f"mcp_servers.{_TOOLBASE_MCP_SERVER}.args="
                   + json.dumps(serve_args),
             # `codex exec` is noninteractive. Without a server-level default,

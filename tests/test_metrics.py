@@ -242,6 +242,18 @@ class TestCostUsd(unittest.TestCase):
         self.assertAlmostEqual(estimate["usd"], 56.0)
         self.assertTrue(estimate["long_context_pricing_applied"])
 
+    def test_gpt56_sol_subscription_api_equivalent(self):
+        estimate = subscription_api_equivalent_cost(
+            "gpt-5.6-sol",
+            input_tokens=1_000_000,
+            cache_read_tokens=1_000_000,
+            output_tokens=1_000_000,
+            initial_input_tokens=272_001,
+        )
+        self.assertAlmostEqual(estimate["usd"], 56.0)
+        self.assertTrue(estimate["long_context_pricing_applied"])
+        self.assertIn("gpt-5.6-sol", estimate["source"])
+
     def test_unknown_subscription_model_is_not_guessed(self):
         self.assertIsNone(subscription_api_equivalent_cost("future-model"))
 
