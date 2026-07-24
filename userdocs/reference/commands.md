@@ -54,6 +54,13 @@ toolbench run --benchmark examples/geometry --models claude-haiku-4-5 \
 | `--parallel`     | Trials in flight at once. Default: the original run's setting.         |
 | `-v`/`--verbose` | Styled per-tool-call output.                                           |
 
+The cap governs the run's **total** spend: what the completed trials already
+cost is pre-charged against it, so resuming with an unchanged cap only spends
+what's left (a run that aborted on budget needs a wider `--max-cost-usd`).
+Trials that previously failed before they could start (failure mode
+`resolution_error`, e.g. a transient toolbase/MCP connection error) are
+**re-run** on resume rather than kept as frozen zero-score rows.
+
 Reads the run's `manifest.json` + `trials.jsonl`, runs only the seeds not yet complete, and
 re-aggregates `summary.json` / `summary.txt`.
 

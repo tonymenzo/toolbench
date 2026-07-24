@@ -47,6 +47,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -200,6 +201,24 @@ _CLAUDE_CODE_TIMEOUT_S = 3 * 60 * 60
 # toolbase's own default is 60s, which kills a multi-thousand-event Pythia
 # shower / Delphes run mid-call; 900s (15 min) fits inside the 2h trial wall.
 _CLAUDE_CODE_CALL_TIMEOUT_S = 3600
+
+
+def _drain_stream(stream, chunks: list) -> None:
+    """Read `stream` to EOF from a daemon thread, collecting text into
+    `chunks`.
+
+    The CLI runtimes spawn their child with both stdout and stderr on
+    PIPE but stream only stdout. Without a concurrent stderr reader, a
+    child that logs more than the OS pipe buffer (~64 KB) to stderr
+    blocks on the write, the stdout stream stalls, and the trial hangs
+    until the wall-clock killer fires — occupying a --parallel worker
+    slot the whole time.
+    """
+    try:
+        for line in stream:
+            chunks.append(line)
+    except Exception:
+        pass
 
 
 def _loadout_toolbase_profile(loadout) -> tuple[str | None, str | None]:
@@ -435,7 +454,6 @@ class ClaudeCodeAgent:
                 pass
             env.setdefault("XDG_CACHE_HOME", str(_cache))
 
-        import threading
         proc = subprocess.Popen(
             cmd, cwd=str(self.sandbox_dir), env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
@@ -443,11 +461,17 @@ class ClaudeCodeAgent:
         # Hard wall even if the stream goes silent (the overall trial ceiling).
         killer = threading.Timer(_CLAUDE_CODE_TIMEOUT_S, proc.kill)
         killer.start()
+        # Drain stderr concurrently so a chatty child can't fill the pipe
+        # and deadlock the stdout stream (see _drain_stream).
+        stderr_chunks: list[str] = []
+        stderr_reader = threading.Thread(
+            target=_drain_stream, args=(proc.stderr, stderr_chunks),
+            daemon=True)
+        stderr_reader.start()
 
         hook = self.traj_hook
         id2name: dict = {}
         result_data = None
-        stderr = ""
         try:
             for raw in proc.stdout:
                 raw = raw.strip()
@@ -496,10 +520,8 @@ class ClaudeCodeAgent:
             proc.wait(timeout=60)
         finally:
             killer.cancel()
-            try:
-                stderr = proc.stderr.read() or ""
-            except Exception:
-                pass
+            stderr_reader.join(timeout=10)
+            stderr = "".join(stderr_chunks)
 
         if result_data is None:
             raise RuntimeError(
@@ -871,19 +893,24 @@ class CodexAgent:
         env.pop("OPENAI_API_KEY", None)
         _apply_harness_env(env, self.harness_env)
 
-        import threading
         proc = subprocess.Popen(
             cmd, cwd=str(self.sandbox_dir), env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
         )
         killer = threading.Timer(_CLAUDE_CODE_TIMEOUT_S, proc.kill)
         killer.start()
+        # Drain stderr concurrently so a chatty child can't fill the pipe
+        # and deadlock the stdout stream (see _drain_stream).
+        stderr_chunks: list[str] = []
+        stderr_reader = threading.Thread(
+            target=_drain_stream, args=(proc.stderr, stderr_chunks),
+            daemon=True)
+        stderr_reader.start()
 
         hook = self.traj_hook
         started: dict = {}            # item id -> tool name (for after_call)
         result_text = None
         turn_done = False
-        stderr = ""
         try:
             for raw in proc.stdout:
                 raw = raw.strip()
@@ -933,10 +960,8 @@ class CodexAgent:
             proc.wait(timeout=60)
         finally:
             killer.cancel()
-            try:
-                stderr = proc.stderr.read() or ""
-            except Exception:
-                pass
+            stderr_reader.join(timeout=10)
+            stderr = "".join(stderr_chunks)
 
         if proc.returncode != 0:
             raise RuntimeError(

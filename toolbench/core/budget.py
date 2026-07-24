@@ -29,6 +29,16 @@ class Budget:
                     f"Budget exceeded: spent ${self._spent:.4f} > cap ${self.max_usd:.4f}"
                 )
 
+    def precharge(self, usd: float | None) -> None:
+        """Record spend that already happened (a resumed run's completed
+        trials) without raising, so the cap governs the run's TOTAL spend
+        rather than resetting on every resume. The caller decides what to
+        do when the pre-charged total already exceeds the cap."""
+        if usd is None:
+            return
+        with self._lock:
+            self._spent += float(usd)
+
     @property
     def spent(self) -> float:
         with self._lock:
