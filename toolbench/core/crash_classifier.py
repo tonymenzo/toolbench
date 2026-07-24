@@ -36,6 +36,13 @@ Currently classified:
   a well-formed answer because the endpoint blipped. The runner retries
   these with backoff so one unreachable-endpoint window doesn't zero out
   a whole campaign's worth of trials.
+- `SESSION_LIMIT`: a subscription coding-agent CLI (claude-code / codex)
+  refused the request because the logged-in account hit its plan's
+  session / usage quota (e.g. "You've hit your session limit · resets
+  4:20am"). This is the account's plan state, not the system's capability
+  or a transient throttle — it is checked FIRST (before RATE_LIMITED) so a
+  quota termination is never misfiled as a 429, and it is excluded from the
+  scored population downstream (see `failure_modes.EXCLUDED_FROM_METRICS`).
 - `AGENT_CRASH`: anything else uncaught from `agent.run()`.
 
 Add new classifications here when a new failure pattern shows up
@@ -47,13 +54,25 @@ import re
 
 from .failure_modes import (
     AGENT_CRASH, CONTEXT_LENGTH_EXCEEDED, MODEL_FORMAT_CRASH, RATE_LIMITED,
-    TRANSIENT_API_ERROR,
+    SESSION_LIMIT, TRANSIENT_API_ERROR,
 )
 
 
 # Snippet of the raw bad JSON we surface in the reason. Long enough to
 # fingerprint the failure, short enough to stay on one console line.
 _RAW_SNIPPET_LEN = 120
+
+# Markers for a subscription coding-agent CLI (claude-code / codex) refusing
+# because the logged-in account hit its plan's session / usage quota, matched
+# lowercase. These are the CLI's own limit phrasings ("You've hit your session
+# limit", "usage limit reached"); deliberately NOT the API's "insufficient_quota"
+# (a RATE_LIMITED billing marker) so API and subscription paths stay distinct.
+_SESSION_LIMIT_MARKERS = (
+    "session limit",
+    "usage limit",
+    "hit your limit",
+    "reached your limit",
+)
 
 # Substrings that mark a context-window overflow across providers
 # (OpenAI: `context_length_exceeded` / "maximum context length";
@@ -138,6 +157,11 @@ def classify_crash(exc: BaseException, traceback_str: str) -> tuple[str, str]:
     if _is_tool_call_json_decode_error(exc, traceback_str):
         return MODEL_FORMAT_CRASH, _format_tool_call_decode_reason(exc)
 
+    # Before RATE_LIMITED: a subscription session/usage-quota refusal is an
+    # account-plan state, not a 429 throttle, and must not be misfiled as one.
+    if _is_session_limit(exc, traceback_str):
+        return SESSION_LIMIT, _session_limit_reason(exc)
+
     if _is_rate_limit_error(exc, traceback_str):
         return RATE_LIMITED, _rate_limit_reason(exc)
 
@@ -148,6 +172,22 @@ def classify_crash(exc: BaseException, traceback_str: str) -> tuple[str, str]:
         return TRANSIENT_API_ERROR, _transient_reason(exc)
 
     return AGENT_CRASH, _short_reason(exc, traceback_str)
+
+
+def _is_session_limit(exc: BaseException, traceback_str: str) -> bool:
+    """True if a subscription CLI refused the request on a plan session/usage
+    quota (claude-code / codex). Matched on the CLI's own limit phrasing in the
+    error text, so it's runtime-agnostic; the message is surfaced by the
+    subscription runtimes when the CLI reports an `is_error` limit response."""
+    blob = f"{exc} {traceback_str}".lower()
+    return any(marker in blob for marker in _SESSION_LIMIT_MARKERS)
+
+
+def _session_limit_reason(exc: BaseException) -> str:
+    head = f"{exc}".replace("\n", " ").strip()
+    if len(head) > 200:
+        head = head[:199] + "…"
+    return f"subscription session/usage limit reached (excluded from metrics): {head}"
 
 
 def _is_rate_limit_error(exc: BaseException, traceback_str: str) -> bool:

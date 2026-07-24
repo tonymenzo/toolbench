@@ -43,7 +43,8 @@ import click
 from toolbench import REPO_ROOT
 from toolbench.core.budget import Budget, BudgetExceeded
 from toolbench.core.failure_modes import (
-    HARD_PROCESS_FAILURES, NONE, UNKNOWN, incomplete_at,
+    EXCLUDED_FROM_METRICS, HARD_PROCESS_FAILURES, NONE, SESSION_LIMIT, UNKNOWN,
+    incomplete_at,
 )
 from toolbench.core.litellm_pricing import fetch_pricing_from_env
 from toolbench.core.llm_factory import registered_providers
@@ -605,7 +606,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"  note: --parallel {args.parallel} with --verbose: "
                   "per-tool-call lines from concurrent trials will interleave "
                   "on stdout (per-trial console.logs stay clean).")
-        new_records, aborted_globally = _run_trial_loop(
+        new_records, aborted_globally, abort_reason = _run_trial_loop(
             benchmark=benchmark, harnesses=harnesses, loadouts=loadouts,
             variants=variants, models=models, seeds=seeds, run_dir=run_dir,
             runner=runner, budget=budget, completed=set(),
@@ -615,7 +616,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         _finalize_run(run_dir=run_dir, manifest=manifest, budget=budget,
                       all_trial_records=new_records, k=args.n,
                       stage_order=stage_order, stage_weights=stage_weights,
-                      aborted=aborted_globally)
+                      aborted=aborted_globally, abort_reason=abort_reason)
     return 0
 
 
@@ -753,7 +754,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     print(f"  Budget cap: ${budget_cap} | prior spend: ${prior_spend:.4f} | "
           f"remaining: ${budget.remaining:.4f}")
 
-    new_records, aborted_globally = _run_trial_loop(
+    new_records, aborted_globally, abort_reason = _run_trial_loop(
         benchmark=benchmark, harnesses=harnesses, loadouts=loadouts,
         variants=variants, models=models, seeds=seeds, run_dir=run_dir,
         runner=runner, budget=budget, completed=completed,
@@ -766,7 +767,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
                   all_trial_records=existing + new_records,
                   k=manifest["n_per_cell"],
                   stage_order=stage_order, stage_weights=stage_weights,
-                  aborted=aborted_globally)
+                  aborted=aborted_globally, abort_reason=abort_reason)
     return 0
 
 
@@ -952,14 +953,20 @@ def _row_reach(stages: dict, stage_order: list[str],
 def _partition_resume_rows(existing: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split prior trials.jsonl rows into `(kept, retryable)` for a resume.
 
-    Retryable rows are those that failed before the trial could even start
-    (failure_mode `resolution_error`: e.g. a transient toolbase/MCP connect
-    failure). Treating them as completed would freeze a score-0 result over
-    an infrastructure blip; a resume re-runs them instead.
+    Retryable rows are those where no genuine measurement was taken, so
+    freezing their score-0 record would be wrong — a resume re-runs them:
+
+      - `resolution_error`: the trial failed before it could even start
+        (e.g. a transient toolbase/MCP connect failure).
+      - `SESSION_LIMIT`: the subscription account's session/usage quota was
+        exhausted; the trial never ran on its merits and will succeed once
+        the quota resets. (Excluded from metrics too — see
+        `failure_modes.EXCLUDED_FROM_METRICS`.)
     """
-    kept = [r for r in existing if r.get("failure_mode") != "resolution_error"]
+    _RETRYABLE = {"resolution_error", SESSION_LIMIT}
+    kept = [r for r in existing if r.get("failure_mode") not in _RETRYABLE]
     retryable = [r for r in existing
-                 if r.get("failure_mode") == "resolution_error"]
+                 if r.get("failure_mode") in _RETRYABLE]
     return kept, retryable
 
 
@@ -1030,6 +1037,7 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
                               completed=completed)
     new_records: list[dict] = []
     aborted = False
+    abort_reason: str | None = None   # "budget" | "session_limit"
     # Budget-abort signal. NB: deliberately NOT executor.shutdown(
     # cancel_futures=True) — a future cancelled while queued never gets
     # set_running_or_notify_cancel() called (its work item is discarded),
@@ -1116,6 +1124,7 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
             except BudgetExceeded as e:
                 if not aborted:
                     print(f"  ABORT: {e}")
+                    abort_reason = "budget"
                 aborted = True
                 abort.set()
                 continue
@@ -1127,14 +1136,35 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
             append_jsonl(run_dir / "trials.jsonl", row)
             if row.get("aborted_by_budget") and not aborted:
                 aborted = True
+                abort_reason = "budget"
                 abort.set()
-    return new_records, aborted
+            # A subscription session/usage-quota termination means every
+            # remaining trial would fail identically until the quota resets, so
+            # stop launching new trials rather than recording a cascade of
+            # score-0 crashes. The already-recorded quota row is excluded from
+            # metrics and re-run by `resume`; the un-launched trials are simply
+            # not attempted (no row), so `resume` picks them up too.
+            elif row.get("failure_mode") == SESSION_LIMIT and not aborted:
+                print("  ABORT: subscription session/usage limit reached — "
+                      "halting the queue. Re-run `toolbench resume --run-id "
+                      "<id>` after your quota resets to finish the remaining "
+                      "trials.")
+                aborted = True
+                abort_reason = "session_limit"
+                abort.set()
+    return new_records, aborted, abort_reason
 
 
 def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
-                  stage_order, stage_weights, aborted) -> None:
+                  stage_order, stage_weights, aborted,
+                  abort_reason: str | None = None) -> None:
     """Re-aggregate from the full trial set, write summary.json + summary.txt,
-    and print the rendered summary."""
+    and print the rendered summary.
+
+    `abort_reason` ("budget" | "session_limit" | None) disambiguates why the
+    run stopped short, so the summary can distinguish a budget abort from a
+    subscription-quota abort (the latter leaves un-attempted trials that
+    `resume` will finish once the quota resets)."""
     # Integrity gate FIRST: quarantine any trial that reached the ground-truth
     # answer key (the claude_code sandbox does not confine Bash). A flagged
     # trial cannot be trusted, so its score is zeroed for aggregation and it is
@@ -1204,7 +1234,34 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
     if _estimates:
         summary["estimated_api_equivalent_cost_usd"] = round(sum(_estimates), 6)
         summary["estimated_cost_basis"] = _estimate_basis
-    summary["aborted_by_budget"] = aborted
+    # Disambiguate the abort reason. A budget abort and a subscription-quota
+    # abort both stop the queue short, but only the former is a spend event;
+    # the latter leaves un-attempted trials that `resume` finishes for free.
+    summary["aborted_by_budget"] = bool(aborted and abort_reason == "budget")
+    summary["aborted_by_session_limit"] = bool(
+        aborted and abort_reason == "session_limit")
+    # Session/usage-limit accounting: excluded trials (recorded but out of the
+    # scored population) plus any that were never attempted because the queue
+    # aborted on the quota. `resume` re-runs both. Expected grid size is
+    # computed defensively so a legacy manifest can't raise here.
+    try:
+        n_expected = (
+            (len(manifest.get("seeds") or []) or 0)
+            * (len(manifest.get("models") or []) or 0)
+            * (len(manifest.get("loadouts") or manifest.get("conditions") or []) or 0)
+            * (len(manifest.get("variants") or []) or 1)
+            * (len(manifest.get("harnesses") or []) or 1)
+        )
+    except Exception:
+        n_expected = 0
+    n_not_attempted = (max(0, n_expected - len(all_trial_records))
+                       if (n_expected and summary["aborted_by_session_limit"])
+                       else 0)
+    summary["session_limit"] = {
+        "aborted": summary["aborted_by_session_limit"],
+        "excluded_trials": summary.get("n_excluded_trials", 0),
+        "not_attempted": n_not_attempted,
+    }
     summary["integrity"] = {
         "scanned": len(all_trial_records),
         "flagged": {tid: {"n_hits": len(hits), "sample": hits[:2]}
@@ -1299,8 +1356,23 @@ def aggregate(trials: list[dict], k: int,
         The dict is JSON-roundtrip safe and is written verbatim to
         `summary.json`.
     """
+    # Trials that represent "no measurement taken" (a subscription
+    # session/usage-quota termination) are dropped from the scored population
+    # rather than folded in as a score-0 — see
+    # failure_modes.EXCLUDED_FROM_METRICS. They remain on disk and are surfaced
+    # as an explicit excluded count (per cell and run-level) so nothing is
+    # silently erased; they simply never enter reach / pass@k / stage funnel /
+    # paired deltas.
+    scored_trials = [t for t in trials
+                     if t.get("failure_mode") not in EXCLUDED_FROM_METRICS]
+    excluded_trials = [t for t in trials
+                       if t.get("failure_mode") in EXCLUDED_FROM_METRICS]
+    excluded_by_cell: dict[tuple[str, str], list[dict]] = {}
+    for t in excluded_trials:
+        excluded_by_cell.setdefault((t["model"], t["condition"]), []).append(t)
+
     cells: dict[tuple[str, str], list[dict]] = {}
-    for t in trials:
+    for t in scored_trials:
         cells.setdefault((t["model"], t["condition"]), []).append(t)
 
     cell_summaries = []
@@ -1381,6 +1453,12 @@ def aggregate(trials: list[dict], k: int,
             "stages": _stages_breakdown(rows),
             "stage_display": _stages_continuous_breakdown(rows),
             "failure_modes": _count_failures(rows),
+            # Trials dropped from this cell's scored population (session/usage
+            # limit). `n` above counts only scored trials; these are reported
+            # separately so the exclusion is visible, not silent.
+            "n_excluded": len(excluded_by_cell.get((model, cond), [])),
+            "excluded_failure_modes": _count_failures(
+                excluded_by_cell.get((model, cond), [])),
             # Individual per-trial reaches (sorted), so the summary can show the
             # spread the cell mean hides (a "capable but flaky" cell reads very
             # differently from a uniform one at the same mean).
@@ -1402,9 +1480,13 @@ def aggregate(trials: list[dict], k: int,
         })
     return {
         "cells": cell_summaries,
-        "paired_deltas": _paired_deltas(trials, stage_order, stage_weights,
-                                        pass_threshold),
-        "n_total_trials": len(trials),
+        "paired_deltas": _paired_deltas(scored_trials, stage_order,
+                                        stage_weights, pass_threshold),
+        # `n_total_trials` is the scored population; excluded trials are
+        # accounted separately so the headline counts reflect measurements.
+        "n_total_trials": len(scored_trials),
+        "n_excluded_trials": len(excluded_trials),
+        "excluded_failure_modes": _count_failures(excluded_trials),
     }
 
 

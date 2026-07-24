@@ -9,6 +9,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from toolbench.core.crash_classifier import classify_crash  # noqa: E402
 from toolbench.core.failure_modes import (  # noqa: E402
     AGENT_CRASH, CONTEXT_LENGTH_EXCEEDED, MODEL_FORMAT_CRASH, RATE_LIMITED,
+    SESSION_LIMIT,
 )
 
 
@@ -153,6 +154,45 @@ class TestRateLimitCrash(unittest.TestCase):
         exc = _make_jdce('{"msg": "rate limit', msg="Unterminated string")
         mode, _ = classify_crash(exc, _GPT_OSS_TRACEBACK)
         self.assertEqual(mode, MODEL_FORMAT_CRASH)
+
+
+class TestSessionLimitCrash(unittest.TestCase):
+    """A subscription coding-agent CLI hitting the account's plan quota is a
+    SESSION_LIMIT — distinct from a 429 throttle and never a capability
+    failure. Checked before RATE_LIMITED so it can't be misfiled as one."""
+
+    def test_claude_code_session_limit_message(self):
+        # Verbatim shape of the claude-code CLI's is_error limit response.
+        exc = RuntimeError(
+            "claude_code runtime: claude reported is_error (success): "
+            "You've hit your session limit · resets 4:20am (America/Chicago)")
+        mode, reason = classify_crash(exc, "")
+        self.assertEqual(mode, SESSION_LIMIT)
+        self.assertIn("limit", reason.lower())
+
+    def test_usage_limit_message(self):
+        exc = RuntimeError("You've reached your usage limit for this plan")
+        mode, _ = classify_crash(exc, "")
+        self.assertEqual(mode, SESSION_LIMIT)
+
+    def test_session_limit_wins_over_rate_limit(self):
+        # A message mentioning both must classify as SESSION_LIMIT (checked
+        # first), not RATE_LIMITED — a quota reset is not a transient throttle.
+        exc = RuntimeError("session limit reached (rate limit 429)")
+        mode, _ = classify_crash(exc, "")
+        self.assertEqual(mode, SESSION_LIMIT)
+
+    def test_api_insufficient_quota_stays_rate_limited(self):
+        # The API's billing-quota error must NOT be swept into SESSION_LIMIT;
+        # it remains a RATE_LIMITED (retried/backed-off) outcome.
+        exc = RuntimeError("You exceeded your current quota: insufficient_quota")
+        mode, _ = classify_crash(exc, "")
+        self.assertEqual(mode, RATE_LIMITED)
+
+    def test_unrelated_crash_is_not_session_limit(self):
+        exc = RuntimeError("ValueError: could not parse geometry.yaml")
+        mode, _ = classify_crash(exc, "")
+        self.assertEqual(mode, AGENT_CRASH)
 
 
 class TestProviderRejectedToolCall(unittest.TestCase):
