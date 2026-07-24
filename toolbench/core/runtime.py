@@ -601,18 +601,25 @@ def _apply_harness_env(env: dict, overrides) -> None:
 
 
 def _claude_code_factory(*, system_prompt, sandbox_dir=None, harness=None,
-                         loadout=None, tool_hooks=None, protected_paths=None,
-                         **_):
-    # `**_` absorbs the orchestral-shaped kwargs (llm, tools, display_hook)
-    # this runtime doesn't use. We DO use tool_hooks: the runner's
-    # TrajectoryHook is in there, and firing it per streamed tool call gives
-    # us the same console.log + transcript as orchestral.
+                         loadout=None, tool_hooks=None, llm=None,
+                         protected_paths=None, **_):
+    # `**_` absorbs the orchestral-shaped kwargs (tools, display_hook) this
+    # runtime doesn't use. We DO use tool_hooks (the runner's TrajectoryHook,
+    # for console.log + transcript parity with orchestral) and llm (it carries
+    # the run matrix's --models value; see below).
     if not sandbox_dir:
         raise ValueError(
             "claude_code runtime requires sandbox_dir (the runner passes it)."
         )
     model, call_timeout_s, profile, project_root, traj_hook, env_overrides = \
         _cli_runtime_common(harness, loadout, tool_hooks)
+    # The run matrix's --models value is carried by SubscriptionLLM and MUST
+    # override the harness's provider.model default; otherwise every cell runs
+    # the harness default model regardless of its --models label (mirrors the
+    # codex factory).
+    requested_model = getattr(llm, "model", None)
+    if requested_model:
+        model = requested_model
     return ClaudeCodeAgent(
         system_prompt=system_prompt, sandbox_dir=sandbox_dir, model=model,
         profile=profile, project_root=project_root,
