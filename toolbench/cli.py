@@ -668,6 +668,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
     trials_path = run_dir / "trials.jsonl"
     existing = read_jsonl(trials_path) if trials_path.exists() else []
+    # Rows that died before their trial could start are re-run, not kept
+    # (the on-disk record is rewritten below, after the budget gate).
+    existing, retryable = _partition_resume_rows(existing)
     completed = {(r.get("harness"), r.get("loadout"),
                   r.get("variant") or (benchmark.default_variant or ""),
                   r.get("model"), r["seed"])
@@ -689,6 +692,25 @@ def cmd_resume(args: argparse.Namespace) -> int:
                   if args.max_cost_usd is not None
                   else manifest.get("max_cost_usd"))
     budget = Budget(budget_cap)
+    # The cap governs the run's TOTAL spend: pre-charge what the completed
+    # trials already cost, so resuming with an unchanged cap can't spend
+    # the whole budget a second time.
+    prior_spend = sum(float(r.get("cost_usd") or 0.0) for r in existing)
+    budget.precharge(prior_spend)
+    # prior_spend > 0 keeps zero-cost resumes viable (a $0 dry-run's cap
+    # is legitimately 0 and its trials bill nothing).
+    if budget.max_usd is not None and budget.remaining <= 0 and prior_spend > 0:
+        print(f"Budget cap ${budget_cap:.2f} is already exhausted: the "
+              f"{len(existing)} completed trial(s) cost ${prior_spend:.4f}. "
+              "Widen it with --max-cost-usd to resume.", file=sys.stderr)
+        return 2
+    # Budget gate passed: drop the retryable rows from the on-disk record
+    # so the retried trials' fresh rows don't duplicate their (cell, seed)
+    # keys in later aggregation.
+    if retryable:
+        with open(trials_path, "w") as fh:
+            for r in existing:
+                fh.write(json.dumps(r, default=str) + "\n")
 
     # Rebuild the LLM judge from the manifest so a resumed run keeps the same
     # judging configuration as the original — silently dropping it would leave
@@ -723,8 +745,13 @@ def cmd_resume(args: argparse.Namespace) -> int:
     )
 
     print(f"Resume: {args.run_id}")
+    if retryable:
+        print(f"  Retrying {len(retryable)} trial(s) that previously failed "
+              "at resolution: "
+              + ", ".join(str(r.get("trial_id", "?")) for r in retryable))
     print(f"  {len(completed)}/{total} trials already complete; {remaining} to go.")
-    print(f"  Budget cap: ${budget_cap}")
+    print(f"  Budget cap: ${budget_cap} | prior spend: ${prior_spend:.4f} | "
+          f"remaining: ${budget.remaining:.4f}")
 
     new_records, aborted_globally = _run_trial_loop(
         benchmark=benchmark, harnesses=harnesses, loadouts=loadouts,
@@ -920,6 +947,20 @@ def _row_reach(stages: dict, stage_order: list[str],
         cum *= passed
         out += cum * w
     return out / total
+
+
+def _partition_resume_rows(existing: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split prior trials.jsonl rows into `(kept, retryable)` for a resume.
+
+    Retryable rows are those that failed before the trial could even start
+    (failure_mode `resolution_error`: e.g. a transient toolbase/MCP connect
+    failure). Treating them as completed would freeze a score-0 result over
+    an infrastructure blip; a resume re-runs them instead.
+    """
+    kept = [r for r in existing if r.get("failure_mode") != "resolution_error"]
+    retryable = [r for r in existing
+                 if r.get("failure_mode") == "resolution_error"]
+    return kept, retryable
 
 
 def _build_work_items(*, harnesses, loadouts, variants, models, seeds,
