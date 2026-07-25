@@ -598,6 +598,52 @@ def cmd_run(args: argparse.Namespace) -> int:
                         release_sources(tmp)
         manifest["resolution"] = resolution_reports
         write_json(run_dir / "manifest.json", manifest)
+
+        # MCP preflight: for every MCP-serving harness x loadout that serves a
+        # toolbase profile, actually start `toolbase serve` and complete a
+        # tools/list handshake BEFORE any trial. A profile that resolves but
+        # serves no tools (mis-wired toolbase command, env churn) otherwise runs
+        # the entire "tools" arm silently tool-less and still grades it as valid.
+        # Hard-fail the run here instead; runs verbatim in dry-run too.
+        from toolbench.core.runtime import (
+            runtime_serves_toolbase_mcp, verify_toolbase_mcp,
+            _loadout_toolbase_profile)
+        mcp_failures: list[str] = []
+        for h in harnesses:
+            if not runtime_serves_toolbase_mcp(h.runtime_name):
+                continue
+            for lo in loadouts:
+                profile, proj = _loadout_toolbase_profile(lo)
+                if not profile:
+                    continue
+                expected = [t for r in resolution_reports
+                            if r.get("harness") == h.id and r.get("loadout") == lo.name
+                            for s in r.get("sources", [])
+                            if s.get("backend") == "toolbase"
+                            for t in s.get("tools", [])]
+                try:
+                    served = verify_toolbase_mcp(profile, cwd=(proj or bench_dir))
+                    missing = [t for t in expected if t not in served]
+                    if missing:
+                        mcp_failures.append(
+                            f"{h.id}/{lo.name} (profile {profile}): server served "
+                            f"{len(served)} tools, missing {missing}")
+                    else:
+                        print(f"  MCP preflight OK: {h.id}/{lo.name} — "
+                              f"{len(served)} tools served ({profile})")
+                except Exception as e:
+                    mcp_failures.append(
+                        f"{h.id}/{lo.name} (profile {profile}): "
+                        f"{type(e).__name__}: {e}")
+        if mcp_failures:
+            print("\n  MCP PREFLIGHT FAILED — aborting before any trial ran:")
+            for f in mcp_failures:
+                print(f"    ✗ {f}")
+            print("  A `tools` loadout could not reach its tools. Check that "
+                  "`toolbase` is installed in this env and the profile serves "
+                  "tools, then re-run.")
+            return 2
+
         if args.dry_run:
             print("  DRY-RUN: agent.run() will be skipped.")
 
