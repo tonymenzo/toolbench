@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 # Repository root (the directory that contains this `toolbench/` package in an
 # editable install). The CLI reads `REPO_ROOT/.env` for provider keys + tool

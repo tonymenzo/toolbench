@@ -192,9 +192,15 @@ def _toolbase_command() -> str:
 
     Invoking Toolbench with an absolute virtual-environment Python does not
     activate that environment or prepend its ``bin`` directory to ``PATH``.
-    Prefer PATH when available, then the executable beside the running Python;
-    retain the bare command only as a final fallback so Codex/Claude can report
-    a normal MCP startup error.
+    Prefer PATH when available, then the executable beside the running Python.
+
+    Raises ``RuntimeError`` when Toolbase cannot be located, instead of
+    returning a bare ``"toolbase"``. A bare command is what silently broke a
+    campaign: a child MCP process launched as ``toolbase serve ...`` failed to
+    start (``command not found`` on the child's PATH), the agent merely saw
+    "No such tool available", and the trial still graded as if it had tools.
+    Fail loudly here — the run preflight (`verify_toolbase_mcp`) turns this into
+    an abort before any trial runs.
     """
     found = shutil.which("toolbase")
     if found:
@@ -202,7 +208,12 @@ def _toolbase_command() -> str:
     sibling = Path(sys.executable).resolve().with_name("toolbase")
     if sibling.is_file():
         return str(sibling)
-    return "toolbase"
+    raise RuntimeError(
+        "toolbase executable not found: neither on PATH nor beside the running "
+        f"Python ({Path(sys.executable).resolve().with_name('toolbase')}). "
+        "Install toolbase into this environment (`pip install toolbase`); a CLI "
+        "runtime cannot serve the loadout's MCP tools without it."
+    )
 # No hardcoded toolkit: the MCP profile a CLI runtime serves is derived from the
 # benchmark's loadout (its `toolbase: {profile: ...}` source) via
 # `_loadout_toolbase_profile`. None => serve no MCP server (the `core` baseline
@@ -251,6 +262,109 @@ def _loadout_toolbase_profile(loadout) -> tuple[str | None, str | None]:
             cfg = src.config if isinstance(src.config, dict) else {}
             return cfg.get("profile"), cfg.get("project_root")
     return None, None
+
+
+# Runtimes that serve the loadout's toolbase profile to their agent over a
+# stdio MCP server (`toolbase serve --profile ...`) rather than resolving tools
+# in-process. For these the MCP connection is verified in the run preflight: a
+# profile that resolves but serves zero tools (a mis-wired toolbase command,
+# env churn) otherwise runs the whole "tools" arm silently tool-less. A new CLI
+# runtime that serves toolbase over MCP registers its name here.
+_MCP_SERVING_RUNTIMES = {"claude_code", "codex"}
+
+
+def runtime_serves_toolbase_mcp(runtime_name: str) -> bool:
+    """True when a harness's runtime drives its agent's tools through a
+    `toolbase serve` MCP child (claude-code, codex), so the run preflight must
+    verify the server actually serves its tools. In-process runtimes
+    (orchestral) resolve tools directly and need no MCP check."""
+    return (runtime_name or "").lower() in _MCP_SERVING_RUNTIMES
+
+
+def verify_toolbase_mcp(profile: str, *, cwd: str, call_timeout_s: int = 60,
+                        timeout: float = 45.0) -> list[str]:
+    """Start `toolbase serve --profile <profile>` exactly as a CLI runtime does
+    and complete an MCP initialize + tools/list handshake, returning the served
+    tool names.
+
+    Raises ``RuntimeError`` if the server cannot launch, the handshake times
+    out, or it serves zero tools. This is the preflight guard that a `tools`
+    loadout actually reaches its tools *before* any trial runs (a served-but-
+    empty toolset previously graded as a valid tools arm)."""
+    import queue
+    import threading
+    import time as _time
+
+    cmd = [_toolbase_command(), "serve", "--profile", profile,
+           "--call-timeout", str(call_timeout_s)]
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, cwd=cwd, bufsize=1)
+    except Exception as e:
+        raise RuntimeError(f"could not launch `{' '.join(cmd)}`: {e}") from e
+
+    err_chunks: list[str] = []
+    threading.Thread(target=_drain_stream, args=(proc.stderr, err_chunks),
+                     daemon=True).start()
+    out_q: "queue.Queue" = queue.Queue()
+
+    def _read_out():
+        try:
+            for line in proc.stdout:  # type: ignore[union-attr]
+                out_q.put(line)
+        except Exception:
+            pass
+        out_q.put(None)
+
+    threading.Thread(target=_read_out, daemon=True).start()
+
+    def _send(obj):
+        proc.stdin.write(json.dumps(obj) + "\n")  # type: ignore[union-attr]
+        proc.stdin.flush()  # type: ignore[union-attr]
+
+    def _fail(msg):
+        tail = "".join(err_chunks)[-400:].strip()
+        raise RuntimeError(f"{msg} (server exit={proc.poll()}"
+                           + (f"; stderr: …{tail}" if tail else "") + ")")
+    try:
+        _send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+               "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                          "clientInfo": {"name": "toolbench-preflight",
+                                         "version": "0"}}})
+        _send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        _send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline:
+            try:
+                line = out_q.get(timeout=1.0)
+            except queue.Empty:
+                if proc.poll() is not None:
+                    _fail(f"MCP server for profile {profile!r} exited before "
+                          "returning tools/list")
+                continue
+            if line is None:
+                _fail(f"MCP server for profile {profile!r} closed its output "
+                      "before returning tools/list")
+            try:
+                msg = json.loads(line)
+            except Exception:
+                continue
+            if msg.get("id") == 2:
+                tools = [t.get("name")
+                         for t in (msg.get("result") or {}).get("tools", [])]
+                if not tools:
+                    _fail(f"MCP server served 0 tools for profile {profile!r}")
+                return tools
+        _fail(f"MCP handshake for profile {profile!r} timed out after "
+              f"{timeout:.0f}s")
+    finally:
+        try:
+            proc.terminate(); proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
 
 class _ClaudeCodeResponse:
