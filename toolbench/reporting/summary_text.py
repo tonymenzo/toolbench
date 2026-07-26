@@ -49,6 +49,11 @@ def render_run_summary(summary: dict, manifest: dict | None = None,
         out.append("")
         out.extend(integ_block)
 
+    sl_block = _render_session_limit(summary)
+    if sl_block:
+        out.append("")
+        out.extend(sl_block)
+
     for cell in summary.get("cells", []):
         out.append("")
         out.append("")
@@ -146,10 +151,59 @@ def _render_integrity(summary: dict) -> list[str]:
     return out
 
 
+def _render_session_limit(summary: dict) -> list[str]:
+    """Note when a run touched the subscription session/usage quota.
+
+    Rendered only when something was excluded or the queue aborted on the
+    quota. Quota terminations are NOT capability failures: the excluded
+    trials are recorded but kept out of the scored metrics, and any
+    un-attempted trials are finished by `resume` once the quota resets.
+    """
+    sl = summary.get("session_limit") or {}
+    excl = int(sl.get("excluded_trials", 0) or 0)
+    na = int(sl.get("not_attempted", 0) or 0)
+    if not (sl.get("aborted") or excl or na):
+        return []
+    out = [*_section_title("SESSION / USAGE LIMIT"), ""]
+    if sl.get("aborted"):
+        out += [
+            "      The run stopped early — the subscription account's",
+            "      session/usage quota was reached. The trials below are NOT",
+            "      capability failures; they are excluded from the scored",
+            "      metrics (reach / pass@k / stage funnel).",
+        ]
+    else:
+        out += [
+            "      Some trials hit the subscription session/usage quota and",
+            "      are excluded from the scored metrics (not a capability",
+            "      failure).",
+        ]
+    out += [
+        "",
+        f"      excluded (recorded, unscored):  {excl}",
+    ]
+    if na:
+        out.append(f"      not attempted (queue aborted):  {na}")
+    out += [
+        "",
+        "      Re-run  `toolbench resume --run-id <id>`  after your quota",
+        "      resets to finish the remaining trials.",
+    ]
+    return out
+
+
 def _render_cell(cell: dict) -> list[str]:
     title = f"CELL  {cell.get('model', '?')}  ×  {cell.get('condition', '?')}"
     lines: list[str] = []
     lines.extend(_banner(title))
+    n_excl = int(cell.get("n_excluded", 0) or 0)
+    if n_excl:
+        # Make the scored-vs-excluded split explicit so the metrics below are
+        # read as being over the scored trials only.
+        lines.append("")
+        lines.append(f"  n = {cell.get('n', 0)} scored   "
+                     f"({n_excl} excluded — session/usage limit, "
+                     f"not a capability failure)")
     lines.append("")
     lines.extend(_render_three_vector(cell))
     lines.append("")

@@ -78,5 +78,45 @@ class TestPairedDeltas(unittest.TestCase):
         self.assertAlmostEqual(summary["paired_deltas"][0]["reach_delta"], 0.45)
 
 
+class TestExcludedFromMetrics(unittest.TestCase):
+    """SESSION_LIMIT trials are dropped from the scored population (n / reach /
+    pass / paired deltas) but surfaced as an explicit excluded count, so a
+    subscription-quota termination never pollutes the metrics as a score-0."""
+
+    def _rows(self):
+        from toolbench.core.failure_modes import SESSION_LIMIT
+        rows = []
+        # cell (m, A): 2 genuine passes (reach 1.0) + 2 quota terminations.
+        for seed in (1, 2):
+            rows.append(_row("m", "A", seed, 1, 1))
+        for seed in (3, 4):
+            rows.append(_row("m", "A", seed, 0, 0,
+                             failure_mode=SESSION_LIMIT, stages={}, score=0.0))
+        # cell (m, B): 2 genuine trials sharing seeds 1,2 with A.
+        for seed in (1, 2):
+            rows.append(_row("m", "B", seed, 1, 0))
+        return rows
+
+    def test_excluded_from_scored_population(self):
+        summary = aggregate(self._rows(), k=4, stage_order=STAGE_ORDER,
+                            stage_weights=WEIGHTS)
+        self.assertEqual(summary["n_total_trials"], 4)      # 2 A + 2 B scored
+        self.assertEqual(summary["n_excluded_trials"], 2)   # 2 quota rows
+        cell_a = next(c for c in summary["cells"] if c["condition"] == "A")
+        self.assertEqual(cell_a["n"], 2)
+        self.assertEqual(cell_a["n_excluded"], 2)
+        # Reach reflects ONLY the 2 genuine passes, not diluted to 0.5 by the
+        # 2 excluded score-0 quota rows.
+        self.assertAlmostEqual(cell_a["reach_bar_k"], 1.0)
+
+    def test_excluded_not_in_paired_deltas(self):
+        # The A−B delta pairs only scored seeds (1, 2); A's excluded quota
+        # rows on seeds 3, 4 must not create phantom pairs or shift the delta.
+        summary = aggregate(self._rows(), k=4, stage_order=STAGE_ORDER,
+                            stage_weights=WEIGHTS)
+        self.assertEqual(len(summary["paired_deltas"]), 1)
+        self.assertEqual(summary["paired_deltas"][0]["n_pairs"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

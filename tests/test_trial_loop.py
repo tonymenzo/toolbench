@@ -49,10 +49,13 @@ class _FakeRunner:
     """Stands in for TrialRunner: records execution, optionally charges
     the budget per trial so abort behavior can be exercised."""
 
-    def __init__(self, cost_per_trial=0.0, barrier=None):
+    def __init__(self, cost_per_trial=0.0, barrier=None, fail_mode=None):
         self.cost = cost_per_trial
         self.ran = []
         self.barrier = barrier
+        # When set, every trial returns this failure_mode with score 0 (used to
+        # exercise the session-limit abort path).
+        self.fail_mode = fail_mode
         self._lock = threading.Lock()
 
     def run_trial(self, *, model_cfg, benchmark, harness, loadout, variant,
@@ -75,6 +78,14 @@ class _FakeRunner:
             aborted = True
         from toolbench.core.task import Grade
         from toolbench.core.trajectory import Trajectory
+        if self.fail_mode is not None:
+            grade = Grade(score=0.0, stages={}, stage_grades=[],
+                          failure_mode=self.fail_mode, judge_kind="rule")
+            return SimpleNamespace(
+                trial_id=trial_id, ok=False, score=0.0, grade=grade,
+                trajectory=Trajectory(), wall_clock_s=0.0, cost_usd=self.cost,
+                aborted_by_budget=aborted, error=None, attempts=1, nudges=0,
+                rate_limit_retries=0, transient_retries=0)
         grade = Grade(score=1.0, stages={"s0": True}, stage_grades=[],
                       failure_mode="NONE", judge_kind="rule")
         return SimpleNamespace(
@@ -98,17 +109,19 @@ class TestRunTrialLoop(unittest.TestCase):
 
     def test_serial_runs_everything(self):
         runner = _FakeRunner()
-        records, aborted = self._loop(runner, Budget(None))
+        records, aborted, reason = self._loop(runner, Budget(None))
         self.assertEqual(len(records), 6)
         self.assertFalse(aborted)
+        self.assertIsNone(reason)
 
     def test_budget_abort_is_balanced_across_cells(self):
         # $1/trial, $3.5 cap → abort fires on trial 4 (seed-major order:
         # A1 B1 A2 B2 ...), leaving each loadout with the SAME number of
         # completed trials instead of one loadout hogging the budget.
         runner = _FakeRunner(cost_per_trial=1.0)
-        records, aborted = self._loop(runner, Budget(3.5))
+        records, aborted, reason = self._loop(runner, Budget(3.5))
         self.assertTrue(aborted)
+        self.assertEqual(reason, "budget")
         per_cell = {}
         for r in records:
             if not r["aborted_by_budget"]:
@@ -119,21 +132,41 @@ class TestRunTrialLoop(unittest.TestCase):
     def test_parallel_runs_everything_and_is_concurrent(self):
         barrier = threading.Barrier(2)
         runner = _FakeRunner(barrier=barrier)
-        records, aborted = self._loop(runner, Budget(None), parallel=2,
-                                      n_loadouts=2, seeds=(1, 2, 3))
+        records, aborted, reason = self._loop(runner, Budget(None), parallel=2,
+                                              n_loadouts=2, seeds=(1, 2, 3))
         # The barrier requires 2 trials in flight simultaneously; if the
         # loop were serial this would deadlock (and time out the wait).
         self.assertEqual(len(records), 6)
         self.assertFalse(aborted)
+        self.assertIsNone(reason)
         self.assertEqual(len(runner.ran), 6)
 
     def test_parallel_budget_abort_stops_launching(self):
         runner = _FakeRunner(cost_per_trial=1.0)
-        records, aborted = self._loop(runner, Budget(2.5), parallel=2,
-                                      seeds=(1, 2, 3, 4, 5))
+        records, aborted, reason = self._loop(runner, Budget(2.5), parallel=2,
+                                              seeds=(1, 2, 3, 4, 5))
         self.assertTrue(aborted)
+        self.assertEqual(reason, "budget")
         # 10 trials enumerated; the abort must prevent most of the tail.
         self.assertLess(len(runner.ran), 10)
+
+    def test_session_limit_aborts_and_stops_launching(self):
+        # A subscription session/usage-quota termination must halt the queue
+        # (every remaining trial would fail identically until the quota
+        # resets) and report the reason as "session_limit", not "budget".
+        # cost_per_trial slows each trial (as in the budget tests) so the
+        # abort demonstrably beats the queue draining; Budget(None) keeps the
+        # abort attributable to the session limit, not the budget.
+        runner = _FakeRunner(cost_per_trial=1.0, fail_mode="SESSION_LIMIT")
+        records, aborted, reason = self._loop(runner, Budget(None), parallel=2,
+                                              seeds=(1, 2, 3, 4, 5))
+        self.assertTrue(aborted)
+        self.assertEqual(reason, "session_limit")
+        # 10 trials enumerated; the abort must prevent most of the tail from
+        # ever launching (only the already-in-flight one(s) get recorded).
+        self.assertLess(len(runner.ran), 10)
+        self.assertTrue(all(r["failure_mode"] == "SESSION_LIMIT"
+                            for r in records))
 
 
 if __name__ == "__main__":

@@ -28,6 +28,23 @@ def test_partition_splits_resolution_errors():
     assert [r["trial_id"] for r in retryable] == ["b"]
 
 
+def test_partition_retries_session_limit():
+    # A subscription session/usage-quota termination took no real
+    # measurement, so a resume must re-run it (like resolution_error) rather
+    # than freezing its score-0 record. A real AGENT_CRASH stays kept.
+    from toolbench.core.failure_modes import SESSION_LIMIT
+    rows = [
+        {"trial_id": "a", "failure_mode": "NONE"},
+        {"trial_id": "b", "failure_mode": SESSION_LIMIT},
+        {"trial_id": "c", "failure_mode": "resolution_error"},
+        {"trial_id": "d", "failure_mode": "AGENT_CRASH"},
+        {"trial_id": "e", "failure_mode": "MODEL_STOPPED_EARLY"},
+    ]
+    kept, retryable = _partition_resume_rows(rows)
+    assert [r["trial_id"] for r in kept] == ["a", "d", "e"]
+    assert sorted(r["trial_id"] for r in retryable) == ["b", "c"]
+
+
 def test_budget_precharge_counts_toward_cap():
     b = Budget(10.0)
     b.precharge(9.5)

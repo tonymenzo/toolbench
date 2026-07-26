@@ -31,6 +31,18 @@ trajectory):
                             (HTTP 429 / overloaded) and the runner's
                             bounded backoff retries were exhausted.
                             Operational, not a capability failure.
+  - `SESSION_LIMIT`       — a subscription coding-agent CLI (claude-code /
+                            codex) refused the request because the logged-in
+                            account hit its plan's session / usage quota
+                            (e.g. "You've hit your session limit · resets
+                            4:20am"). This is a property of the ACCOUNT's
+                            plan state at that moment, not of the system
+                            under test, so it is excluded from the scored
+                            population entirely (see `EXCLUDED_FROM_METRICS`)
+                            rather than recorded as a score-0 measurement.
+                            The runner aborts the remaining queue on the
+                            first one (all trials would fail identically
+                            until the quota resets); `resume` re-runs them.
   - `TRANSIENT_API_ERROR` — a transient transport/server fault reaching
                             the provider (connect/read timeout, dropped
                             connection, HTTP 5xx) that survived the
@@ -62,6 +74,7 @@ MODEL_FORMAT_CRASH      = "MODEL_FORMAT_CRASH"
 CONTEXT_LENGTH_EXCEEDED = "CONTEXT_LENGTH_EXCEEDED"
 RATE_LIMITED            = "RATE_LIMITED"
 TRANSIENT_API_ERROR     = "TRANSIENT_API_ERROR"
+SESSION_LIMIT           = "SESSION_LIMIT"
 MODEL_STOPPED_EARLY     = "MODEL_STOPPED_EARLY"
 GRADE_ERROR             = "GRADE_ERROR"
 
@@ -75,7 +88,24 @@ INCOMPLETE_AT_PREFIX = "INCOMPLETE_AT_"
 # regrade may legitimately upgrade it to NONE / INCOMPLETE_AT_<id>.
 HARD_PROCESS_FAILURES: frozenset[str] = frozenset({
     AGENT_CRASH, MODEL_FORMAT_CRASH, CONTEXT_LENGTH_EXCEEDED, RATE_LIMITED,
-    TRANSIENT_API_ERROR, GRADE_ERROR,
+    TRANSIENT_API_ERROR, SESSION_LIMIT, GRADE_ERROR,
+})
+
+
+# Failure modes that represent "no measurement was taken" rather than a
+# capability outcome, and are therefore dropped from the scored population
+# (reach / pass@k / pass^k / stage funnel / paired deltas) instead of being
+# folded in as a score-0 trial. A subscription session/usage-quota
+# termination is a property of the account's plan state, not of the system
+# under test — counting it as a zero would misreport the system's capability.
+# The trials are still RECORDED on disk (for provenance and so `resume` can
+# re-run them) and surfaced in the summary as an explicit excluded count; they
+# just never enter the metrics. Deliberately scoped to `SESSION_LIMIT` for now
+# — the other operational modes (RATE_LIMITED / TRANSIENT_API_ERROR /
+# CONTEXT_LENGTH_EXCEEDED) retain their existing in-population behaviour; add
+# them here only as a considered, separately-reviewed change.
+EXCLUDED_FROM_METRICS: frozenset[str] = frozenset({
+    SESSION_LIMIT,
 })
 
 
