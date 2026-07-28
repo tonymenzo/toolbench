@@ -1922,6 +1922,7 @@ class _SectionedGroup(click.Group):
 
     SECTIONS = [
         ("Running benchmarks", ["run", "resume", "regrade"]),
+        ("Sharing results", ["export"]),
     ]
 
     def format_commands(self, ctx, formatter):
@@ -2117,6 +2118,53 @@ def _regrade(**kw) -> int:
     to refresh grades + summary without re-executing any agent — and to apply an
     LLM judge retroactively, so judging never has to be decided at run time."""
     return cmd_regrade(SimpleNamespace(**kw))
+
+
+@cli.command("export", short_help="Export a run as a portable, schema-versioned dataset.")
+@click.option("--run-id", "run_id", required=True,
+              help="Existing run directory under runs/ (nested ids like "
+                   "campaign/<id>/<run> resolve too).")
+@click.option("--out", "out", default=None,
+              help="Destination directory. Default: runs/exports/<run-id-leaf>/.")
+@click.option("--include-transcripts", is_flag=True, default=False,
+              help="Bundle the raw transcripts. They dominate the size and are "
+                   "copied verbatim (binary, so NOT path-scrubbed) — opt in only "
+                   "when the audience needs agent-behaviour evidence.")
+@click.option("--no-scrub", is_flag=True, default=False,
+              help="Skip rewriting machine-specific absolute paths to "
+                   "placeholders. Default is to scrub.")
+@click.option("--archive", is_flag=True, default=False,
+              help="Also write <out>.tar.gz next to the export directory.")
+def _export(run_id: str, out: str | None, include_transcripts: bool,
+            no_scrub: bool, archive: bool) -> int:
+    """Write a portable export of a completed run.
+
+    Produces a flat, schema-versioned `trials.jsonl` (one denormalized row per
+    trial — what a results page renders and a reviewer checks) plus a `bundle/`
+    of the graded evidence behind it. Transcripts are excluded by default.
+    """
+    from toolbench.core.export import export_run
+
+    run_dir = _runs_root() / run_id
+    if not run_dir.is_dir():
+        raise click.ClickException(f"no such run: {run_dir}")
+    out_dir = Path(out) if out else _runs_root() / "exports" / Path(run_id).name
+    try:
+        rep = export_run(run_dir, out_dir, scrub=not no_scrub,
+                         include_transcripts=include_transcripts,
+                         archive=archive)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+    click.echo(f"exported {rep['n_trials']} trial(s) from {rep['run_id']}")
+    click.echo(f"  {out_dir}/trials.jsonl   (schema {__import__('toolbench.core.export', fromlist=['x']).SCHEMA_VERSION})")
+    click.echo(f"  {out_dir}/run.json")
+    click.echo(f"  {out_dir}/bundle/        {rep['files_bundled']} file(s)"
+               f"{'' if rep['transcripts'] else '  [transcripts excluded]'}")
+    if not rep["scrubbed"]:
+        click.echo("  WARNING: paths were NOT scrubbed — do not publish as-is.")
+    if rep.get("archive"):
+        click.echo(f"  {rep['archive']}  ({rep['archive_bytes']/1e6:.1f} MB)")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
