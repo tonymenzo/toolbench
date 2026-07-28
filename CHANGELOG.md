@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-28
+
 ### Added
 
 - **`toolbench export`** — turn a completed run into something you can share.

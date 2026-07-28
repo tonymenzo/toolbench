@@ -12,6 +12,12 @@ is the scannable reference. `toolbench --help` groups the commands, and `toolben
 | `toolbench resume` | Resume an interrupted run, only the seeds that didn't finish.        |
 | `toolbench regrade`| Re-judge a finished run's preserved artifacts after a rubric change, or apply an LLM judge retroactively. |
 
+## Sharing results
+
+| Command             | Purpose                                                             |
+|---------------------|---------------------------------------------------------------------|
+| `toolbench export`  | Turn a completed run into a portable, schema-versioned dataset you can publish. |
+
 ## `toolbench run`
 
 | Flag                          | Default            | Meaning                                                        |
@@ -78,6 +84,31 @@ rubric, picking up new/changed checks without re-executing any agent. Hard proce
 (crashes) keep their failure mode, while rubric-derived modes are recomputed. It also **applies
 an LLM judge retroactively** (`--judge rule+llm` or `--judge llm`), so judging never has to be
 decided at run time — you can run once and later decide how to grade.
+
+## `toolbench export`
+
+| Flag                    | Default                        | Meaning                                        |
+|-------------------------|--------------------------------|------------------------------------------------|
+| `--run-id`              | *(required)*                   | Existing run directory under `runs/` (nested ids like `campaign/<id>/<run>` resolve too). |
+| `--out`                 | `runs/exports/<run-id-leaf>/`  | Destination directory.                          |
+| `--include-transcripts` | off                            | Bundle the raw transcripts. They dominate the size and are copied verbatim (binary, so **not** path-scrubbed). |
+| `--no-scrub`            | off                            | Skip rewriting machine-specific absolute paths to `${HOME}` / `${RUN}` placeholders. |
+| `--archive`             | off                            | Also write `<out>.tar.gz` next to the export directory. |
+
+A run directory is a working artifact — gigabytes of transcripts and intermediate data
+carrying absolute paths from the machine that produced it. `export` writes two layers you
+can actually publish:
+
+- **`trials.jsonl`** — one flat, denormalized, schema-versioned row per trial (cell
+  coordinates, score, pass/fail against the rubric's own threshold, per-stage
+  credits/weights/metrics, telemetry, provenance). Kilobytes, and denormalized on purpose so
+  a consumer needs no join logic and no knowledge of toolbench's internal layout.
+- **`bundle/`** — the graded evidence behind those rows: per-trial answer files, audit logs,
+  run summaries, manifest. Megabytes.
+
+`run.json` carries the run-level metadata. `schema_version` (currently `1.0`) is the
+compatibility contract: additive changes bump the minor, anything that moves or retypes an
+existing field bumps the major.
 
 ## Conventions
 
