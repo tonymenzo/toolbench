@@ -140,6 +140,16 @@ class TrialResult:
 #   - ux_feedback (bool, default off): issue one post-completion, UNSCORED
 #     turn asking the agent to critique the tools it was given. A tool-
 #     development aid, not a benchmark condition; see `_UX_FEEDBACK_PROMPT`.
+def _is_subscription(harness) -> bool:
+    """Does this harness run under a subscription rather than metered API use?
+
+    Subscription trials draw down no per-trial charge whatever their CLI prints,
+    so their cost must not reach the budget tracker.
+    """
+    return ((getattr(harness, "provider", None) or {}).get("name")
+            == "subscription")
+
+
 _LOOP_DEFAULTS = {"max_iterations": 150, "max_format_retries": 3,
                   "continue_nudges": 0, "max_rate_limit_retries": 3,
                   "max_transient_retries": 4, "ux_feedback": False}
@@ -722,6 +732,20 @@ class TrialRunner:
         # agent/context, so all attempts' tokens already accumulate in this
         # one trajectory. If this throws, we still grade and persist the
         # partial trial — the CLI will then stop launching new ones.
+        #
+        # A SUBSCRIPTION harness spends no money per trial, whatever its CLI
+        # reports. The `claude` CLI prints `total_cost_usd` — an API-equivalent
+        # figure — even under a subscription, and charging that to the budget
+        # made subscription runs look like real spend and could abort a run on a
+        # cap that nothing was actually drawing down. Codex only ever looked
+        # correct here because its CLI emits no cost field at all. Route the
+        # figure to the counterfactual estimate instead, where the summary
+        # already reports subscription runs' API-equivalent cost.
+        cli_api_equivalent_usd = None
+        if _is_subscription(harness):
+            if trajectory.cost_usd:
+                cli_api_equivalent_usd = float(trajectory.cost_usd)
+            trajectory.cost_usd = 0.0
         try:
             budget.add(trajectory.cost_usd)
         except BudgetExceeded as e:
@@ -867,6 +891,11 @@ class TrialRunner:
             "grade": grade.to_dict(),
             "wall_clock_s": round(wall_clock, 2),
             "cost_usd": trajectory.cost_usd,
+            # Subscription runs spend nothing; the CLI-reported figure (when the
+            # runtime provides one) is preserved here as the counterfactual
+            # API-equivalent, alongside the token-based estimate the summary
+            # computes for runtimes that report no cost at all.
+            "estimated_api_equivalent_cost_usd": cli_api_equivalent_usd,
             "attempts": attempts,
             "nudges": nudges,
             "rate_limit_retries": rate_limit_retries,
