@@ -1272,6 +1272,12 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
     summary["pass_criterion"] = manifest.get("pass_criterion", "all_stages")
     summary["reach_weights"] = manifest.get("reach_weights", {})
     summary["total_spent_usd"] = round(budget.spent, 6)
+    # State the billing mode explicitly rather than leaving it inferable from a
+    # $0.00 spend: a subscription run and a run that happened to cost nothing
+    # are different claims, and only one of them is reproducible from a budget.
+    summary["subscription_harnesses"] = sorted(
+        h for h, prov in _provider_by_harness.items()
+        if prov == "subscription" and h)
     _estimates = [
         float(r["estimated_api_equivalent_cost_usd"])
         for r in all_trial_records

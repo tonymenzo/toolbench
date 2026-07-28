@@ -91,7 +91,15 @@ def _render_run_header(summary: dict, manifest: dict) -> list[str]:
         if isinstance(budget, (int, float))
         else f"${spent:.2f} spent"
     )
-    if isinstance(estimated, (int, float)):
+    subs = summary.get("subscription_harnesses") or []
+    if subs:
+        # No money is drawn on a subscription, so a cap is not what bounded this
+        # run. Say so unconditionally -- a bare "$0.00 spent" reads as a free run
+        # rather than an unmetered one.
+        budget_line = "$0.00 spent — SUBSCRIPTION (no metered API spend)"
+        if isinstance(estimated, (int, float)):
+            budget_line += f"   ${estimated:.2f} API-equivalent (estimated)"
+    elif isinstance(estimated, (int, float)):
         budget_line += (
             f"   ${estimated:.2f} API-equivalent (estimated, subscription)"
         )
