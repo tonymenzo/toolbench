@@ -438,8 +438,28 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     models = _split(args.models)
     if not models:
-        print("No --models given.", file=sys.stderr)
-        return 2
+        # Fall back to the models the selected harnesses pin. This is the
+        # normal path for a campaign whose harnesses are one-per-model: the
+        # model is configuration, not something retyped per invocation.
+        pinned = []
+        for h in harnesses:
+            m = (h.provider or {}).get("model")
+            if m and m not in pinned:
+                pinned.append(m)
+        if not pinned:
+            print("No --models given, and no selected harness pins a "
+                  "provider.model to fall back to.", file=sys.stderr)
+            return 2
+        if len(harnesses) > 1 and len(pinned) > 1:
+            print(f"No --models given; the {len(harnesses)} selected harnesses "
+                  f"pin different models {pinned}. Sweeping the harness axis "
+                  f"and the model axis together would run every model on every "
+                  f"harness, which is not what a per-model harness means. "
+                  f"Run them one harness at a time, or pass --models "
+                  f"explicitly.", file=sys.stderr)
+            return 2
+        models = pinned
+        print(f"  models: {', '.join(models)} (from harness provider.model)")
     if args.provider:
         print("warning: --provider is ignored; the provider comes from the harness.",
               file=sys.stderr)
@@ -1988,8 +2008,13 @@ def cli() -> None:
               help="Comma-separated variant name(s) — the scaffolding axis "
                    "(prompt + sandbox), orthogonal to the loadout. "
                    "Default: the benchmark's default_variant.")
-@click.option("--models", "--model", "models", required=True,
-              help="Comma-separated model id(s). 'stub' is allowed with --dry-run.")
+@click.option("--models", "--model", "models", default=None,
+              help="Comma-separated model id(s). 'stub' is allowed with "
+                   "--dry-run. Optional when every selected harness pins its "
+                   "own provider.model — a harness pinned per model makes the "
+                   "model configuration recorded in the manifest rather than an "
+                   "invocation detail, and requiring it again on the command "
+                   "line invites the two disagreeing.")
 @click.option("--provider", default=None, hidden=True)  # deprecated: from harness
 @click.option("--n", "n", type=int, default=3, show_default=True,
               help="Trials per cell.")
