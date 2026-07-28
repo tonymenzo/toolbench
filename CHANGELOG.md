@@ -8,6 +8,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-07-28
+
+### Fixed
+
+- **Subscription runs no longer book spend they never incurred.** The `claude`
+  CLI prints `total_cost_usd` on every run — an API-equivalent figure, not money
+  drawn — and the runner fed it straight into the budget tracker. A five-trial
+  haiku cell therefore reported $1.29/trial and an opus cell $5.31/trial against
+  caps that nothing was drawing down, and a long enough run could abort on a
+  budget it was not consuming. Codex only ever looked correct because its CLI
+  emits no cost field at all, so the gap stayed invisible until a claude-code and
+  a codex run were compared in the same campaign.
+
+  A harness declaring `provider.name: subscription` now zeroes the trajectory
+  cost before the budget sees it and preserves the CLI figure as
+  `estimated_api_equivalent_cost_usd` on the trial record, alongside the
+  token-based estimate the summary already computed for runtimes reporting no
+  cost. Metered API harnesses are unaffected.
+
+### Changed
+
+- **The summary states the billing mode outright** rather than leaving it
+  inferable from a `$0.00` spend: `$0.00 spent — SUBSCRIPTION (no metered API
+  spend)`, plus the API-equivalent when known. A subscription run and a run that
+  happened to cost nothing are different claims, and only one of them is
+  reproducible from a budget cap. `summary["subscription_harnesses"]` records
+  which harnesses ran unmetered.
+
+- **`--models` / `--model` is now optional** when every selected harness pins its
+  own `provider.model`. A campaign defining one harness per (runtime × model)
+  puts the model in the manifest as configuration; requiring the flag again asks
+  for the same fact twice and invites the two disagreeing — the flag silently
+  won, so a harness named for one model could run another. When omitted the model
+  is taken from the harness and echoed as `models: <id> (from harness
+  provider.model)`. Selecting several harnesses that pin *different* models
+  without `--models` is an error rather than a cross product, since sweeping the
+  harness and model axes together is the opposite of what a per-model harness
+  means. Passing `--models` explicitly sweeps exactly as before.
+
+### Upgrade note
+
+`--max-cost-usd` no longer bounds a run on a subscription harness, because there
+is no metered spend to cap. The flag is still required and still bounds metered
+harnesses; on subscription harnesses, wall-clock and trial count are the real
+limits.
+
 ## [0.4.0] — 2026-07-28
 
 ### Added
