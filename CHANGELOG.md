@@ -8,6 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **`toolbench export`** — turn a completed run into something you can share.
+  A run directory is a working artifact: gigabytes of transcripts and
+  intermediate data carrying absolute paths from the machine that produced it,
+  which is not a thing you can attach to a paper or render a results page from.
+  `export` writes two layers instead:
+
+  - `trials.jsonl` — one flat, denormalized, **schema-versioned** row per trial
+    (cell coordinates, score, pass/fail against the rubric's own threshold,
+    per-stage credits/weights/metrics, telemetry, provenance). Kilobytes.
+    Denormalized on purpose so a consumer needs no join logic and no knowledge
+    of toolbench's internal layout.
+  - `bundle/` — the graded evidence behind those rows: per-trial answer files,
+    audit logs, run summaries, manifest. Megabytes.
+
+  Transcripts are excluded by default (`--include-transcripts` opts in): they
+  dominate the size and, being binary, are copied verbatim rather than scrubbed.
+  Machine-specific absolute paths are rewritten to `${HOME}` / `${RUN}`
+  placeholders unless `--no-scrub` is passed. `--archive` also writes a
+  `.tar.gz`. On a representative 5-trial run this is 2.7 GB -> 13 MB (1.8 MB
+  compressed).
+
+  `schema_version` is the compatibility contract: additive changes bump the
+  minor, anything that moves or retypes an existing field bumps the major.
+
 ## [0.3.0] — 2026-07-24
 
 ### Added
