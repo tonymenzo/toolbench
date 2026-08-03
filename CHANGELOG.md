@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
     - toolbase: { loadout: default }    # was: { profile: default }
   ```
 
+  The runtime kwarg and attribute are `loadout` too — toolbase adopted this word *because* it was already toolbench's, so a `toolbase_`-prefixed variant would reintroduce the translation the rename removed.
+
   No alias: `profile:` raises and names its replacement. Silence would be worse here than usual — a benchmark whose tools fail to resolve doesn't error, it runs as a *tool-less arm* and grades as a valid condition, so a stale config would quietly turn a comparison into a measurement of the model alone.
 
   Requires `toolbase>=0.12`; the extra was pinned at `>=0.3.0`, which no longer describes anything that works.

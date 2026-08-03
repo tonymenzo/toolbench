@@ -332,11 +332,9 @@ def resolve_toolbase_source(source: Source, base_directory: str) -> list:
     Returns orchestral `BaseTool`s (namespaced `<toolkit>__<tool>`), held live
     until `release_toolbase(base_directory)`.
 
-    Two senses of "loadout" nest here. A *toolbench* loadout is the benchmark
-    condition being run; one of its sources may name a *toolbase* loadout,
-    which is the curated tool set toolbase serves into it. Not the same
-    object. toolbase called its own a "profile" until 0.12 and this key
-    followed that name.
+    A benchmark loadout's source names a toolbase loadout: the same idea one
+    layer down, which is why they share the word. (toolbase called its own a
+    "profile" until 0.12, and this key followed that name.)
     """
     try:
         from toolbase.connect.orchestral import toolbase_tools

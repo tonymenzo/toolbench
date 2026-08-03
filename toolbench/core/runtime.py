@@ -218,7 +218,7 @@ def _toolbase_command() -> str:
 # from the benchmark's loadout (its `toolbase: {loadout: ...}` source) via
 # `_toolbase_loadout_for`. None => serve no MCP server (the `core` baseline
 # runs with only the builtin tools below).
-_CLAUDE_CODE_TOOLBASE_LOADOUT = None
+_CLAUDE_CODE_LOADOUT = None
 # Builtin Claude Code tools the agent needs in addition to the MCP tools.
 _CLAUDE_CODE_BUILTIN_TOOLS = [
     "Bash", "Write", "Edit", "Read", "Glob", "Grep", "TodoWrite",
@@ -394,7 +394,7 @@ class ClaudeCodeAgent:
 
     def __init__(self, *, system_prompt: str, sandbox_dir: str,
                  model: str | None = None,
-                 toolbase_loadout: str | None = _CLAUDE_CODE_TOOLBASE_LOADOUT,
+                 loadout: str | None = _CLAUDE_CODE_LOADOUT,
                  project_root: str | None = None,
                  call_timeout_s: int = _CLAUDE_CODE_CALL_TIMEOUT_S,
                  traj_hook=None, env=None, cli_opts=None, protected_paths=None):
@@ -405,7 +405,7 @@ class ClaudeCodeAgent:
         self.protected_paths = [str(Path(os.path.expanduser(
             os.path.expandvars(p))).resolve()) for p in (protected_paths or [])]
         self.model = model or "claude-haiku-4-5"
-        self.toolbase_loadout = toolbase_loadout
+        self.loadout = loadout
         self.project_root = project_root
         self.call_timeout_s = int(call_timeout_s)
         self.harness_env = dict(env or {})
@@ -438,7 +438,7 @@ class ClaudeCodeAgent:
         `toolbase serve` resolves its toolkits' `base_directory` (default
         `${CWD}`) from the cwd we launch `claude` in — the sandbox — so the
         served tools operate inside the sandbox."""
-        if not self.toolbase_loadout:
+        if not self.loadout:
             return None
         if self._mcp_config_path is not None:
             return self._mcp_config_path
@@ -449,7 +449,7 @@ class ClaudeCodeAgent:
         # (`runtime.call_timeout_s`); see _CLAUDE_CODE_CALL_TIMEOUT_S.
         # `toolbase serve` has no project-root flag; it resolves config by
         # walking up from its cwd (the sandbox) to the benchmark's .toolbase.
-        args = ["serve", "--loadout", self.toolbase_loadout,
+        args = ["serve", "--loadout", self.loadout,
                 "--call-timeout", str(self.call_timeout_s)]
         path = self.sandbox_dir / ".mcp.json"
         config = {
@@ -714,6 +714,9 @@ def _cli_runtime_common(harness, loadout, tool_hooks):
         if runtime_cfg.get("call_timeout_s") is not None:
             call_timeout_s = int(runtime_cfg["call_timeout_s"])
         env_overrides = dict(runtime_cfg.get("env") or {})
+    # `loadout` is this trial's benchmark condition; the name it yields is
+    # the toolbase loadout to serve. Distinct local only because the
+    # parameter already holds the other one.
     tb_loadout, project_root = _toolbase_loadout_for(loadout)
     traj_hook = None
     for h in (tool_hooks or []):
@@ -755,7 +758,7 @@ def _claude_code_factory(*, system_prompt, sandbox_dir=None, harness=None,
         model = requested_model
     return ClaudeCodeAgent(
         system_prompt=system_prompt, sandbox_dir=sandbox_dir, model=model,
-        toolbase_loadout=tb_loadout, project_root=project_root,
+        loadout=tb_loadout, project_root=project_root,
         call_timeout_s=call_timeout_s, traj_hook=traj_hook, env=env_overrides,
         cli_opts=_claude_code_cli_opts(harness), protected_paths=protected_paths,
     )
@@ -823,7 +826,7 @@ class CodexAgent:
     the same sandbox."""
 
     def __init__(self, *, system_prompt: str, sandbox_dir: str,
-                 model: str | None = None, toolbase_loadout: str | None = None,
+                 model: str | None = None, loadout: str | None = None,
                  project_root: str | None = None,
                  call_timeout_s: int = _CLAUDE_CODE_CALL_TIMEOUT_S,
                  sandbox_mode: str = _CODEX_DEFAULT_SANDBOX, traj_hook=None,
@@ -832,7 +835,7 @@ class CodexAgent:
         self.system_prompt = system_prompt or ""
         self.sandbox_dir = Path(sandbox_dir).resolve()
         self.model = model            # None => codex uses its configured default
-        self.toolbase_loadout = toolbase_loadout
+        self.loadout = loadout
         self.project_root = project_root
         self.call_timeout_s = int(call_timeout_s)
         self.sandbox_mode = sandbox_mode or _CODEX_DEFAULT_SANDBOX
@@ -855,9 +858,9 @@ class CodexAgent:
         for strings/arrays). `toolbase serve` resolves config from its cwd
         (the sandbox), which the codex process — and thus its MCP child —
         runs in."""
-        if not self.toolbase_loadout:
+        if not self.loadout:
             return []
-        serve_args = ["serve", "--loadout", self.toolbase_loadout,
+        serve_args = ["serve", "--loadout", self.loadout,
                       "--call-timeout", str(self.call_timeout_s)]
         return [
             "-c", f"mcp_servers.{_TOOLBASE_MCP_SERVER}.command="
@@ -1142,7 +1145,7 @@ def _codex_factory(*, system_prompt, sandbox_dir=None, harness=None,
             "reasoning_effort")
     return CodexAgent(
         system_prompt=system_prompt, sandbox_dir=sandbox_dir, model=model,
-        toolbase_loadout=tb_loadout, project_root=project_root, call_timeout_s=call_timeout_s,
+        loadout=tb_loadout, project_root=project_root, call_timeout_s=call_timeout_s,
         sandbox_mode=sandbox_mode, traj_hook=traj_hook, env=env_overrides,
         reasoning_effort=reasoning_effort, protected_paths=protected_paths,
     )
