@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **A `toolbase:` source names a `loadout:`, not a `profile:`.** toolbase renamed profiles to loadouts in its 0.12 and removed the old spellings outright, so every call toolbench made into it raised. Both tool-resolution paths were dead: the in-process orchestral bridge (`toolbase_tools(profile=...)` → `TypeError`) and the MCP subprocess the `claude_code` / `codex` runtimes spawn (`toolbase serve --profile` → `No such option`). Any benchmark with a `toolbase:` source could not resolve its tools at all.
+
+  ```yaml
+  sources:
+    - toolbase: { loadout: default }    # was: { profile: default }
+  ```
+
+  No alias: `profile:` raises and names its replacement. Silence would be worse here than usual — a benchmark whose tools fail to resolve doesn't error, it runs as a *tool-less arm* and grades as a valid condition, so a stale config would quietly turn a comparison into a measurement of the model alone.
+
+  Requires `toolbase>=0.12`; the extra was pinned at `>=0.3.0`, which no longer describes anything that works.
+
+### Fixed
+
+- **The toolbase tests validated toolbench against a toolbase that no longer existed.** They run against a fake module injected into `sys.modules`, because toolbase is an optional dependency and the suite has to pass without it. The fake declared the signature toolbench *believed* toolbase had, so when toolbase changed, the two drifted together and the suite stayed green over a completely broken integration — which is how the breakage above went unnoticed through a release.
+
+  The fake now tracks the real signature, and a new contract test asserts against the installed toolbase directly — kwargs the resolver passes by name, flags the CLI runtimes put in argv, and the discovery attributes provenance reads. It skips when toolbase isn't installed, so the no-toolbase path is unchanged. Verified by simulating a regressed toolbase: the contract tests fail, where before nothing did.
+
+- **Setup instructions used a flag that no longer exists.** The toolbase guide told you to run `tb install -e examples/calculator -g -a`; `-g` was removed in toolbase 0.12 in favour of `-u`, and `-a` now activates the *project* rather than the user-level loadout. Both the guide and the manual said otherwise.
+
 ## [0.5.0] — 2026-07-28
 
 ### Fixed

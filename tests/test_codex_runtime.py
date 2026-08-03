@@ -24,7 +24,7 @@ def test_first_turn_is_isolated_and_explicit(tmp_path):
 
 
 def test_toolbase_mcp_is_auto_approved_for_noninteractive_exec(tmp_path):
-    a = _agent(tmp_path, profile="hep-symb")
+    a = _agent(tmp_path, toolbase_loadout="hep-symb")
     args = a._mcp_config_args()
     assert any("default_tools_approval_mode=\"approve\"" in x for x in args)
 

@@ -1,8 +1,12 @@
 name: calc_toolbase
-# Resolve tools from a toolbase profile (the `calculator` example toolkit).
+# Resolve tools from a toolbase loadout (the `calculator` example toolkit).
 # Requires: toolbench[toolbase] installed, and the calculator toolkit installed
-# + activated into the named profile (see docs/guides/toolbase.md).
+# + activated into the named loadout (see docs/guides/toolbase.md).
+#
+# `loadout:` below names a *toolbase* loadout — the curated tool set toolbase
+# serves. It is not this file, which is a *toolbench* loadout (a benchmark
+# condition). The two nest.
 tools:
   sources:
-    - toolbase: { profile: default }
+    - toolbase: { loadout: default }
 skills: []

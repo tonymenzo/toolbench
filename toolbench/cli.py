@@ -621,21 +621,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         write_json(run_dir / "manifest.json", manifest)
 
         # MCP preflight: for every MCP-serving harness x loadout that serves a
-        # toolbase profile, actually start `toolbase serve` and complete a
-        # tools/list handshake BEFORE any trial. A profile that resolves but
+        # toolbase loadout, actually start `toolbase serve` and complete a
+        # tools/list handshake BEFORE any trial. A loadout that resolves but
         # serves no tools (mis-wired toolbase command, env churn) otherwise runs
         # the entire "tools" arm silently tool-less and still grades it as valid.
         # Hard-fail the run here instead; runs verbatim in dry-run too.
         from toolbench.core.runtime import (
             runtime_serves_toolbase_mcp, verify_toolbase_mcp,
-            _loadout_toolbase_profile)
+            _toolbase_loadout_for)
         mcp_failures: list[str] = []
         for h in harnesses:
             if not runtime_serves_toolbase_mcp(h.runtime_name):
                 continue
             for lo in loadouts:
-                profile, proj = _loadout_toolbase_profile(lo)
-                if not profile:
+                tb_loadout, proj = _toolbase_loadout_for(lo)
+                if not tb_loadout:
                     continue
                 expected = [t for r in resolution_reports
                             if r.get("harness") == h.id and r.get("loadout") == lo.name
@@ -643,25 +643,25 @@ def cmd_run(args: argparse.Namespace) -> int:
                             if s.get("backend") == "toolbase"
                             for t in s.get("tools", [])]
                 try:
-                    served = verify_toolbase_mcp(profile, cwd=(proj or bench_dir))
+                    served = verify_toolbase_mcp(tb_loadout, cwd=(proj or bench_dir))
                     missing = [t for t in expected if t not in served]
                     if missing:
                         mcp_failures.append(
-                            f"{h.id}/{lo.name} (profile {profile}): server served "
+                            f"{h.id}/{lo.name} (toolbase loadout {tb_loadout}): server served "
                             f"{len(served)} tools, missing {missing}")
                     else:
                         print(f"  MCP preflight OK: {h.id}/{lo.name} — "
-                              f"{len(served)} tools served ({profile})")
+                              f"{len(served)} tools served ({tb_loadout})")
                 except Exception as e:
                     mcp_failures.append(
-                        f"{h.id}/{lo.name} (profile {profile}): "
+                        f"{h.id}/{lo.name} (toolbase loadout {tb_loadout}): "
                         f"{type(e).__name__}: {e}")
         if mcp_failures:
             print("\n  MCP PREFLIGHT FAILED — aborting before any trial ran:")
             for f in mcp_failures:
                 print(f"    ✗ {f}")
             print("  A `tools` loadout could not reach its tools. Check that "
-                  "`toolbase` is installed in this env and the profile serves "
+                  "`toolbase` is installed in this env and the loadout serves "
                   "tools, then re-run.")
             return 2
 

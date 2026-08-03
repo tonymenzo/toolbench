@@ -20,7 +20,7 @@ It is the benchmarking half of a loop whose other half is
 
 ```bash
 pip install toolbench                 # the framework + CLI
-pip install 'toolbench[toolbase]'     # + resolve tools from toolbase profiles
+pip install 'toolbench[toolbase]'     # + resolve tools from toolbase loadouts
 pip install 'toolbench[mcp]'          # + serve any MCP server as a loadout source
 ```
 
@@ -80,7 +80,7 @@ you only get credit for a stage if every stage before it also passed. Stages can
 - :material-pencil-ruler: **[Author a benchmark](authoring/overview.md)**.
   Write your own task, rubric, tools, and variants.
 - :material-tools: **[Integrate toolbase](guides/toolbase.md)**.
-  Benchmark against tools served from a toolbase profile.
+  Benchmark against tools served from a toolbase loadout.
 
 </div>
 

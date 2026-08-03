@@ -298,18 +298,45 @@ def release_sources(base_directory: str) -> None:
 release_toolbase = release_sources
 
 
+def _reject_profile_key(cfg: dict, source: Source) -> None:
+    """Fail loudly on the pre-0.12 `profile:` key.
+
+    toolbase renamed profiles to loadouts and removed the old spellings
+    outright, so this key can no longer resolve to anything. Silence would
+    be worse than usual here: a benchmark whose tools failed to resolve
+    doesn't error, it runs as a *tool-less arm* and grades as a valid
+    condition, so a stale config would quietly turn a comparison into a
+    measurement of the model alone.
+    """
+    if "profile" not in cfg:
+        return
+    name = cfg.get("profile")
+    raise RuntimeError(
+        "toolbase source: `profile:` was renamed to `loadout:` when toolbase "
+        "renamed profiles to loadouts (0.12). Update the source to "
+        f"`toolbase: {{loadout: {name!r}}}`. "
+        f"Offending source: {source.config!r}"
+    )
+
+
 def resolve_toolbase_source(source: Source, base_directory: str) -> list:
     """Resolve a `toolbase:` loadout source to orchestral tools, in-process.
 
     `source.config` is a dict. Supported forms:
-      - `{profile: NAME}`                     serve toolbase profile NAME
-      - `{profile: NAME, project_root: PATH}` resolve config against PATH
-      - `{project_root: PATH}`                serve PATH's active/default profile
+      - `{loadout: NAME}`                     serve toolbase loadout NAME
+      - `{loadout: NAME, project_root: PATH}` resolve config against PATH
+      - `{project_root: PATH}`                serve PATH's active/default loadout
 
     The inline `{toolsets: {...}}` form (compile-to-`.toolbase/`) is not wired
-    yet — author a toolbase profile and reference it with `profile:` instead.
+    yet — author a toolbase loadout and reference it with `loadout:` instead.
     Returns orchestral `BaseTool`s (namespaced `<toolkit>__<tool>`), held live
     until `release_toolbase(base_directory)`.
+
+    Two senses of "loadout" nest here. A *toolbench* loadout is the benchmark
+    condition being run; one of its sources may name a *toolbase* loadout,
+    which is the curated tool set toolbase serves into it. Not the same
+    object. toolbase called its own a "profile" until 0.12 and this key
+    followed that name.
     """
     try:
         from toolbase.connect.orchestral import toolbase_tools
@@ -322,20 +349,21 @@ def resolve_toolbase_source(source: Source, base_directory: str) -> list:
         ) from e
 
     cfg = source.config if isinstance(source.config, dict) else {}
-    profile = cfg.get("profile")
+    _reject_profile_key(cfg, source)
+    loadout = cfg.get("loadout")
     project_root = cfg.get("project_root")
     if project_root:
         project_root = Path(os.path.expandvars(str(project_root))).expanduser()
-    if not profile and not project_root:
+    if not loadout and not project_root:
         if cfg.get("toolsets"):
             raise RuntimeError(
                 "toolbase source: the inline `toolsets:` spec is not wired yet. "
-                "Author a toolbase profile (`tb profile create ...`) and reference "
-                "it here as `toolbase: {profile: NAME}`. "
+                "Author a toolbase loadout (`tb loadout create ...`) and reference "
+                "it here as `toolbase: {loadout: NAME}`. "
                 f"Offending source: {source.config!r}"
             )
         raise RuntimeError(
-            "toolbase source: give a `profile:` (and optional `project_root:`). "
+            "toolbase source: give a `loadout:` (and optional `project_root:`). "
             f"Offending source: {source.config!r}"
         )
 
@@ -347,7 +375,7 @@ def resolve_toolbase_source(source: Source, base_directory: str) -> list:
     # agent passes fails. toolbase >= the config_overrides feature
     # accepts the kwarg; older versions get a loud warning because the
     # mismatch corrupts trials silently.
-    tb_kwargs: dict = {"profile": profile, "project_root": project_root,
+    tb_kwargs: dict = {"loadout": loadout, "project_root": project_root,
                        "quiet": True}
     _tb_params = inspect.signature(toolbase_tools).parameters
     if "config_overrides" in _tb_params:
@@ -366,20 +394,21 @@ def resolve_toolbase_source(source: Source, base_directory: str) -> list:
 
     stack = _source_stack(base_directory)
     tools = list(stack.enter_context(toolbase_tools(**tb_kwargs)))
-    # A profile legitimately serves only a subset of a toolkit's tools (its
-    # selected bundles), so `hidden > 0` is normal and NOT worth warning about
-    # every trial. Warn only when a toolkit advertised tools but served *none* —
-    # the unambiguous "you pointed at a profile and got nothing" misconfig.
+    # A toolbase loadout legitimately serves only a subset of a toolkit's
+    # tools (its selected bundles), so `hidden > 0` is normal and NOT worth
+    # warning about every trial. Warn only when a toolkit advertised tools
+    # but served *none* — the unambiguous "you pointed at a loadout and got
+    # nothing" misconfig.
     for r in drop_report:
         if r.get("advertised", 0) > 0 and r.get("served", 0) == 0:
             print(f"warning: toolbase source {source.config!r}: toolkit "
                   f"{r['toolkit']!r} advertised {r['advertised']} tools but "
-                  "served 0 — every tool was filtered out by the profile / "
-                  "bundle selection / config gating. Check the profile's "
-                  "bundles and `tb config`.", file=sys.stderr)
-    # The profile curates what toolbase serves; a loadout-level `select:`
-    # carves an ablation arm out of that served set without authoring one
-    # profile per arm. Items match the namespaced name (`toolkit__tool`)
+                  "served 0 — every tool was filtered out by the toolbase "
+                  "loadout / bundle selection / config gating. Check the "
+                  "loadout's bundles and `tb config`.", file=sys.stderr)
+    # The toolbase loadout curates what toolbase serves; a toolbench
+    # source-level `select:` carves an ablation arm out of that served set
+    # without authoring one toolbase loadout per arm. Items match the namespaced name (`toolkit__tool`)
     # or a bare tool name when unambiguous.
     tools = _select_namespaced(tools, source.select,
                                label=f"toolbase:{source.config!r}")

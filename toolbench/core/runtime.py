@@ -214,11 +214,11 @@ def _toolbase_command() -> str:
         "Install toolbase into this environment (`pip install toolbase`); a CLI "
         "runtime cannot serve the loadout's MCP tools without it."
     )
-# No hardcoded toolkit: the MCP profile a CLI runtime serves is derived from the
-# benchmark's loadout (its `toolbase: {profile: ...}` source) via
-# `_loadout_toolbase_profile`. None => serve no MCP server (the `core` baseline
+# No hardcoded toolkit: the toolbase loadout a CLI runtime serves is derived
+# from the benchmark's loadout (its `toolbase: {loadout: ...}` source) via
+# `_toolbase_loadout_for`. None => serve no MCP server (the `core` baseline
 # runs with only the builtin tools below).
-_CLAUDE_CODE_PROFILE = None
+_CLAUDE_CODE_TOOLBASE_LOADOUT = None
 # Builtin Claude Code tools the agent needs in addition to the MCP tools.
 _CLAUDE_CODE_BUILTIN_TOOLS = [
     "Bash", "Write", "Edit", "Read", "Glob", "Grep", "TodoWrite",
@@ -250,24 +250,24 @@ def _drain_stream(stream, chunks: list) -> None:
         pass
 
 
-def _loadout_toolbase_profile(loadout) -> tuple[str | None, str | None]:
-    """The toolbase ``(profile, project_root)`` a CLI runtime should serve over
-    MCP, taken from the benchmark's loadout — its first ``toolbase: {profile,
+def _toolbase_loadout_for(loadout) -> tuple[str | None, str | None]:
+    """The toolbase ``(loadout, project_root)`` a CLI runtime should serve over
+    MCP, taken from the benchmark's loadout — its first ``toolbase: {loadout,
     project_root}`` source. Returns ``(None, None)`` when the loadout has no
     toolbase source (e.g. the ``core`` baseline), in which case the CLI runs
     with only its builtin tools. This is what keeps the CLI runtimes generic:
-    the served toolkit follows the loadout, never a hardcoded profile name."""
+    the served toolkit follows the benchmark loadout, never a hardcoded name."""
     for src in (getattr(loadout, "sources", None) or []):
         if getattr(src, "backend", None) == "toolbase":
             cfg = src.config if isinstance(src.config, dict) else {}
-            return cfg.get("profile"), cfg.get("project_root")
+            return cfg.get("loadout"), cfg.get("project_root")
     return None, None
 
 
-# Runtimes that serve the loadout's toolbase profile to their agent over a
-# stdio MCP server (`toolbase serve --profile ...`) rather than resolving tools
+# Runtimes that serve the benchmark loadout's toolbase loadout to their agent
+# over a stdio MCP server (`toolbase serve --loadout ...`) rather than resolving tools
 # in-process. For these the MCP connection is verified in the run preflight: a
-# profile that resolves but serves zero tools (a mis-wired toolbase command,
+# toolbase loadout that resolves but serves zero tools (a mis-wired toolbase command,
 # env churn) otherwise runs the whole "tools" arm silently tool-less. A new CLI
 # runtime that serves toolbase over MCP registers its name here.
 _MCP_SERVING_RUNTIMES = {"claude_code", "codex"}
@@ -281,9 +281,9 @@ def runtime_serves_toolbase_mcp(runtime_name: str) -> bool:
     return (runtime_name or "").lower() in _MCP_SERVING_RUNTIMES
 
 
-def verify_toolbase_mcp(profile: str, *, cwd: str, call_timeout_s: int = 60,
+def verify_toolbase_mcp(loadout: str, *, cwd: str, call_timeout_s: int = 60,
                         timeout: float = 45.0) -> list[str]:
-    """Start `toolbase serve --profile <profile>` exactly as a CLI runtime does
+    """Start `toolbase serve --loadout <loadout>` exactly as a CLI runtime does
     and complete an MCP initialize + tools/list handshake, returning the served
     tool names.
 
@@ -295,7 +295,7 @@ def verify_toolbase_mcp(profile: str, *, cwd: str, call_timeout_s: int = 60,
     import threading
     import time as _time
 
-    cmd = [_toolbase_command(), "serve", "--profile", profile,
+    cmd = [_toolbase_command(), "serve", "--loadout", loadout,
            "--call-timeout", str(call_timeout_s)]
     try:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -339,11 +339,11 @@ def verify_toolbase_mcp(profile: str, *, cwd: str, call_timeout_s: int = 60,
                 line = out_q.get(timeout=1.0)
             except queue.Empty:
                 if proc.poll() is not None:
-                    _fail(f"MCP server for profile {profile!r} exited before "
+                    _fail(f"MCP server for toolbase loadout {loadout!r} exited before "
                           "returning tools/list")
                 continue
             if line is None:
-                _fail(f"MCP server for profile {profile!r} closed its output "
+                _fail(f"MCP server for toolbase loadout {loadout!r} closed its output "
                       "before returning tools/list")
             try:
                 msg = json.loads(line)
@@ -353,9 +353,9 @@ def verify_toolbase_mcp(profile: str, *, cwd: str, call_timeout_s: int = 60,
                 tools = [t.get("name")
                          for t in (msg.get("result") or {}).get("tools", [])]
                 if not tools:
-                    _fail(f"MCP server served 0 tools for profile {profile!r}")
+                    _fail(f"MCP server served 0 tools for toolbase loadout {loadout!r}")
                 return tools
-        _fail(f"MCP handshake for profile {profile!r} timed out after "
+        _fail(f"MCP handshake for toolbase loadout {loadout!r} timed out after "
               f"{timeout:.0f}s")
     finally:
         try:
@@ -393,7 +393,8 @@ class ClaudeCodeAgent:
     """
 
     def __init__(self, *, system_prompt: str, sandbox_dir: str,
-                 model: str | None = None, profile: str | None = _CLAUDE_CODE_PROFILE,
+                 model: str | None = None,
+                 toolbase_loadout: str | None = _CLAUDE_CODE_TOOLBASE_LOADOUT,
                  project_root: str | None = None,
                  call_timeout_s: int = _CLAUDE_CODE_CALL_TIMEOUT_S,
                  traj_hook=None, env=None, cli_opts=None, protected_paths=None):
@@ -404,7 +405,7 @@ class ClaudeCodeAgent:
         self.protected_paths = [str(Path(os.path.expanduser(
             os.path.expandvars(p))).resolve()) for p in (protected_paths or [])]
         self.model = model or "claude-haiku-4-5"
-        self.profile = profile
+        self.toolbase_loadout = toolbase_loadout
         self.project_root = project_root
         self.call_timeout_s = int(call_timeout_s)
         self.harness_env = dict(env or {})
@@ -431,13 +432,13 @@ class ClaudeCodeAgent:
 
     # -- MCP wiring -----------------------------------------------------
     def _ensure_mcp_config(self) -> Path | None:
-        """Write `<sandbox>/.mcp.json` wiring the loadout's toolbase profile
+        """Write `<sandbox>/.mcp.json` wiring the benchmark loadout's toolbase loadout
         as a stdio MCP server, or return None when the loadout serves no
-        toolbase profile (the agent then runs with only its builtin tools).
+        toolbase loadout (the agent then runs with only its builtin tools).
         `toolbase serve` resolves its toolkits' `base_directory` (default
         `${CWD}`) from the cwd we launch `claude` in — the sandbox — so the
         served tools operate inside the sandbox."""
-        if not self.profile:
+        if not self.toolbase_loadout:
             return None
         if self._mcp_config_path is not None:
             return self._mcp_config_path
@@ -448,7 +449,7 @@ class ClaudeCodeAgent:
         # (`runtime.call_timeout_s`); see _CLAUDE_CODE_CALL_TIMEOUT_S.
         # `toolbase serve` has no project-root flag; it resolves config by
         # walking up from its cwd (the sandbox) to the benchmark's .toolbase.
-        args = ["serve", "--profile", self.profile,
+        args = ["serve", "--loadout", self.toolbase_loadout,
                 "--call-timeout", str(self.call_timeout_s)]
         path = self.sandbox_dir / ".mcp.json"
         config = {
@@ -473,7 +474,7 @@ class ClaudeCodeAgent:
                 "Install Claude Code and log in (subscription auth)."
             )
         mcp_config = self._ensure_mcp_config()
-        # When the loadout serves a toolbase profile, allow its MCP tools;
+        # When the loadout serves a toolbase loadout, allow its MCP tools;
         # otherwise (the `core` baseline) the agent gets only its builtin tools.
         allowed_tools = list(_CLAUDE_CODE_BUILTIN_TOOLS)
         if mcp_config is not None:
@@ -696,13 +697,13 @@ class ClaudeCodeAgent:
 def _cli_runtime_common(harness, loadout, tool_hooks):
     """Shared factory plumbing for the CLI-driven runtimes (claude_code,
     codex): the model + per-call timeout from the harness, the served toolbase
-    profile from the loadout, and the runner's TrajectoryHook (records tool
+    loadout from the benchmark loadout, and the runner's TrajectoryHook (records tool
     calls onto the trajectory + emits the styled console line; other hooks like
     TruncateOutputHook are ignored — they only matter for an in-process model).
     Also reads `runtime.env` (a mapping of environment variables to set on the
     CLI subprocess, e.g. `ENABLE_TOOL_SEARCH: "false"` to load all MCP tools
     eagerly instead of behind Claude Code's tool-search deferral).
-    Returns (model, call_timeout_s, profile, project_root, traj_hook, env)."""
+    Returns (model, call_timeout_s, tb_loadout, project_root, traj_hook, env)."""
     model = None
     call_timeout_s = _CLAUDE_CODE_CALL_TIMEOUT_S
     env_overrides: dict = {}
@@ -713,14 +714,14 @@ def _cli_runtime_common(harness, loadout, tool_hooks):
         if runtime_cfg.get("call_timeout_s") is not None:
             call_timeout_s = int(runtime_cfg["call_timeout_s"])
         env_overrides = dict(runtime_cfg.get("env") or {})
-    profile, project_root = _loadout_toolbase_profile(loadout)
+    tb_loadout, project_root = _toolbase_loadout_for(loadout)
     traj_hook = None
     for h in (tool_hooks or []):
         if (hasattr(h, "before_call") and hasattr(h, "after_call")
                 and hasattr(h, "trajectory")):
             traj_hook = h
             break
-    return model, call_timeout_s, profile, project_root, traj_hook, env_overrides
+    return model, call_timeout_s, tb_loadout, project_root, traj_hook, env_overrides
 
 
 def _apply_harness_env(env: dict, overrides) -> None:
@@ -743,7 +744,7 @@ def _claude_code_factory(*, system_prompt, sandbox_dir=None, harness=None,
         raise ValueError(
             "claude_code runtime requires sandbox_dir (the runner passes it)."
         )
-    model, call_timeout_s, profile, project_root, traj_hook, env_overrides = \
+    model, call_timeout_s, tb_loadout, project_root, traj_hook, env_overrides = \
         _cli_runtime_common(harness, loadout, tool_hooks)
     # The run matrix's --models value is carried by SubscriptionLLM and MUST
     # override the harness's provider.model default; otherwise every cell runs
@@ -754,7 +755,7 @@ def _claude_code_factory(*, system_prompt, sandbox_dir=None, harness=None,
         model = requested_model
     return ClaudeCodeAgent(
         system_prompt=system_prompt, sandbox_dir=sandbox_dir, model=model,
-        profile=profile, project_root=project_root,
+        toolbase_loadout=tb_loadout, project_root=project_root,
         call_timeout_s=call_timeout_s, traj_hook=traj_hook, env=env_overrides,
         cli_opts=_claude_code_cli_opts(harness), protected_paths=protected_paths,
     )
@@ -799,7 +800,7 @@ register_runtime("claude_code", _claude_code_factory)
 # Drives a benchmark trial with the OpenAI Codex CLI (`codex exec --json`)
 # under the user's logged-in ChatGPT subscription (never an API key, so no
 # per-token API cost). Mirrors the claude_code runtime: the loadout's
-# toolbase profile is served over MCP (wired via `-c mcp_servers.*` TOML
+# toolbase loadout is served over MCP (wired via `-c mcp_servers.*` TOML
 # overrides), scoped to the trial sandbox because we launch `codex` with
 # cwd = sandbox (so the toolbase MCP server it spawns inherits it). Tool
 # calls are streamed as JSONL events and bridged onto the runner's
@@ -822,7 +823,7 @@ class CodexAgent:
     the same sandbox."""
 
     def __init__(self, *, system_prompt: str, sandbox_dir: str,
-                 model: str | None = None, profile: str | None = None,
+                 model: str | None = None, toolbase_loadout: str | None = None,
                  project_root: str | None = None,
                  call_timeout_s: int = _CLAUDE_CODE_CALL_TIMEOUT_S,
                  sandbox_mode: str = _CODEX_DEFAULT_SANDBOX, traj_hook=None,
@@ -831,7 +832,7 @@ class CodexAgent:
         self.system_prompt = system_prompt or ""
         self.sandbox_dir = Path(sandbox_dir).resolve()
         self.model = model            # None => codex uses its configured default
-        self.profile = profile
+        self.toolbase_loadout = toolbase_loadout
         self.project_root = project_root
         self.call_timeout_s = int(call_timeout_s)
         self.sandbox_mode = sandbox_mode or _CODEX_DEFAULT_SANDBOX
@@ -849,14 +850,14 @@ class CodexAgent:
     # -- MCP wiring -----------------------------------------------------
     def _mcp_config_args(self) -> list[str]:
         """`-c mcp_servers.toolbase.*` overrides serving the loadout's toolbase
-        profile, or [] when the loadout serves no profile (the agent then runs
+        toolbase loadout, or [] when the benchmark loadout serves none (the agent runs
         with only Codex's builtin shell). Values are TOML (JSON is valid TOML
         for strings/arrays). `toolbase serve` resolves config from its cwd
         (the sandbox), which the codex process — and thus its MCP child —
         runs in."""
-        if not self.profile:
+        if not self.toolbase_loadout:
             return []
-        serve_args = ["serve", "--profile", self.profile,
+        serve_args = ["serve", "--loadout", self.toolbase_loadout,
                       "--call-timeout", str(self.call_timeout_s)]
         return [
             "-c", f"mcp_servers.{_TOOLBASE_MCP_SERVER}.command="
@@ -1122,7 +1123,7 @@ def _codex_factory(*, system_prompt, sandbox_dir=None, harness=None,
         raise ValueError(
             "codex runtime requires sandbox_dir (the runner passes it)."
         )
-    model, call_timeout_s, profile, project_root, traj_hook, env_overrides = \
+    model, call_timeout_s, tb_loadout, project_root, traj_hook, env_overrides = \
         _cli_runtime_common(harness, loadout, tool_hooks)
     sandbox_mode = _CODEX_DEFAULT_SANDBOX
     if harness is not None:
@@ -1141,7 +1142,7 @@ def _codex_factory(*, system_prompt, sandbox_dir=None, harness=None,
             "reasoning_effort")
     return CodexAgent(
         system_prompt=system_prompt, sandbox_dir=sandbox_dir, model=model,
-        profile=profile, project_root=project_root, call_timeout_s=call_timeout_s,
+        toolbase_loadout=tb_loadout, project_root=project_root, call_timeout_s=call_timeout_s,
         sandbox_mode=sandbox_mode, traj_hook=traj_hook, env=env_overrides,
         reasoning_effort=reasoning_effort, protected_paths=protected_paths,
     )

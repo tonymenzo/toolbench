@@ -4,7 +4,7 @@
 
 ```bash
 pip install toolbench                 # the framework + CLI
-pip install 'toolbench[toolbase]'     # + resolve tools from toolbase profiles
+pip install 'toolbench[toolbase]'     # + resolve tools from toolbase loadouts
 pip install 'toolbench[mcp]'          # + serve any MCP server as a loadout source
 pip install 'toolbench[docs]'         # + build these docs locally
 ```

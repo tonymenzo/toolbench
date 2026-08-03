@@ -69,11 +69,11 @@ CLI that owns the model request and ships its own core tools.
   (subscription), so **no API key** — it strips `ANTHROPIC_API_KEY` from the subprocess
   env, and the run incurs no per-token API cost. Shipped harness id
   `claude-code/default`. `core: {builtin: true}` — the runtime ships its own
-  Bash/Write/Edit/Read/Glob/Grep/TodoWrite; a loadout's `toolbase:` profile is served to
+  Bash/Write/Edit/Read/Glob/Grep/TodoWrite; a loadout's `toolbase:` loadout is served to
   it over MCP by a `toolbase serve` subprocess (see [Integrating toolbase](toolbase.md)).
 - **`codex`** — drives `codex exec --json`. Subscription auth, strips `OPENAI_API_KEY`.
   Shipped harness id `codex/default`. `core: {builtin: true}` uses Codex's own tools; the
-  model comes from `--models` on the CLI, and a loadout's `toolbase:` profile is likewise
+  model comes from `--models` on the CLI, and a loadout's `toolbase:` loadout is likewise
   served over MCP.
 
 Both CLI runtimes use the credential-free `subscription` provider: `provider:` is a
