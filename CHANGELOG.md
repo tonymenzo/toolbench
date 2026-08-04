@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-03
+
 ### Changed (breaking)
 
 - **A `toolbase:` source names a `loadout:`, not a `profile:`.** toolbase renamed profiles to loadouts in its 0.12 and removed the old spellings outright, so every call toolbench made into it raised. Both tool-resolution paths were dead: the in-process orchestral bridge (`toolbase_tools(profile=...)` → `TypeError`) and the MCP subprocess the `claude_code` / `codex` runtimes spawn (`toolbase serve --profile` → `No such option`). Any benchmark with a `toolbase:` source could not resolve its tools at all.
