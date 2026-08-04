@@ -207,8 +207,8 @@ tools:
   sources:
     - python: tools/dunderkit.py
       select: [additive]              # optional bundle/tool allowlist
-    - toolbase: { profile: my-profile }
-      select: [calculator__add]       # ablate within the served profile
+    - toolbase: { loadout: my-loadout }
+      select: [calculator__add]       # ablate within the served loadout
     - mcp: { command: ["npx", "@some/mcp-server"], env: { TOKEN: "${MY_TOKEN}" } }
     - mcp: { url: "https://host/mcp", headers: { Authorization: "Bearer ${TOK}" } }
 skills: []
@@ -218,7 +218,7 @@ skills: []
 |----------------|---------------------------------------------------------------------|
 | `tools.sources`| Ordered list. Each entry names exactly one backend.                 |
 | `python:`      | A module import path or filesystem path exposing `TOOLS`/`make_tools`. |
-| `toolbase:`    | `{profile, project_root?}`, resolved via toolbase; served toolkit versions are recorded as provenance. *(inline `toolsets:` not yet wired.)* |
+| `toolbase:`    | `{loadout, project_root?}`, resolved via toolbase; served toolkit versions are recorded as provenance. *(inline `toolsets:` not yet wired.)* |
 | `mcp:`         | Any MCP server: `{command: [argv...], env?}` (stdio) or `{url, headers?}` (HTTP), `timeout?` seconds. Needs `toolbench[mcp]`. |
 | `select:`      | Sibling of a source, keeping only these bundles/tools (toolbase/mcp: namespaced or unambiguous bare names). |
 | `skills:`      | `[{name, file, mode?}]` — guide docs delivered to the agent: `on_demand` (default) copies the file into the sandbox `skills/` dir with a system-prompt pointer; `inline` embeds it in the system prompt. `file:` is benchmark-relative; a missing file fails the trial setup loudly. |

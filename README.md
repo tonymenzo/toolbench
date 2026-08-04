@@ -14,7 +14,7 @@ development.
 
 ```bash
 pip install toolbench                 # core framework
-pip install 'toolbench[toolbase]'     # + resolve tools from toolbase profiles
+pip install 'toolbench[toolbase]'     # + resolve tools from toolbase loadouts
 ```
 
 Requires Python ≥ 3.12. The CLI is available as both `toolbench` and the short alias `tbe`.
@@ -54,7 +54,7 @@ axes — vary any of them on the command line to run an ablation:
 A **loadout source** is one of:
 
 - `python:` — import a module exposing `TOOLS` / `make_tools()` (the no-dependency escape hatch),
-- `toolbase:` — resolve tools from a [toolbase](https://github.com/alexr314/toolbase) profile,
+- `toolbase:` — resolve tools from a [toolbase](https://github.com/alexr314/toolbase) loadout,
   in-process (requires `toolbench[toolbase]`); served toolkit versions are recorded in the
   run manifest as reproducibility provenance, or
 - `mcp:` — serve any MCP server's tools, stdio or HTTP (requires `toolbench[mcp]`):
@@ -62,8 +62,8 @@ A **loadout source** is one of:
   ```yaml
   tools:
     sources:
-      - toolbase: { profile: my-profile }
-        select: [calculator__add]          # optional: ablate within the profile
+      - toolbase: { loadout: my-loadout }
+        select: [calculator__add]          # optional: ablate within the loadout
       - mcp: { url: "https://host/mcp", headers: { Authorization: "Bearer ${TOK}" } }
   ```
 

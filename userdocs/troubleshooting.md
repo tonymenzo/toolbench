@@ -26,8 +26,8 @@ rejected auth) surface in the `--dry-run` resolution preview before any model is
 
 ## "the inline `toolsets:` spec is not wired yet"
 
-The `toolbase: { toolsets: { ... } }` form isn't implemented. Author a toolbase profile and
-reference it as `toolbase: { profile: NAME }` instead. The example `full_toolbase` /
+The `toolbase: { toolsets: { ... } }` form isn't implemented. Author a toolbase loadout and
+reference it as `toolbase: { loadout: NAME }` instead. The example `full_toolbase` /
 `full_mixed` loadouts use the unwired form and are placeholders.
 
 ## "tool name collision: 'X' provided by both …"

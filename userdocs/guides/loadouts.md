@@ -50,14 +50,14 @@ Each source names exactly one backend:
 
 === "toolbase:"
 
-    Resolve a curated set from a [toolbase](toolbase.md) profile, served in-process
+    Resolve a curated set from a [toolbase](toolbase.md) loadout, served in-process
     (requires `pip install 'toolbench[toolbase]'`). The served toolkit versions are
     recorded in the run manifest and each trial as reproducibility provenance:
 
     ```yaml
     tools:
       sources:
-        - toolbase: { profile: geometry-tools }
+        - toolbase: { loadout: geometry-tools }
     ```
 
     See [Integrating toolbase](toolbase.md) for the full setup.
@@ -107,7 +107,7 @@ name: full_mixed
 tools:
   sources:
     - python: tools/dunderkit.py   # local primitives
-    - toolbase: { profile: geometry-tools }     # served domain tools
+    - toolbase: { loadout: geometry-tools }     # served domain tools
 ```
 
 ## Skills

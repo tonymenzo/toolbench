@@ -30,14 +30,14 @@ Harness
 
 Loadout
 :   The **domain tools** the agent is equipped with, beyond the harness core. An ordered
-    list of *sources*, each either a `python:` module or a `toolbase:` profile. Loadouts
+    list of *sources*, each either a `python:` module or a `toolbase:` loadout. Loadouts
     are the usual ablation axis. `core_only` vs `full_local` measures what the tools buy
     you.
 
 Source
 :   One entry in a loadout's tool list. `python:` imports a module exposing `TOOLS` /
     `make_tools()` (the no-toolbase escape hatch). `toolbase:` resolves a curated set from
-    a [toolbase](../guides/toolbase.md) profile. A tool name may not appear from two
+    a [toolbase](../guides/toolbase.md) loadout. A tool name may not appear from two
     sources at once.
 
 Variant

@@ -2,7 +2,7 @@
 
 You have three ways to give an agent domain tools, and a hook for adding a model provider.
 For real, versioned, isolated toolkits, author them in
-[toolbase](../guides/toolbase.md) and reference a profile. For quick, benchmark-local
+[toolbase](../guides/toolbase.md) and reference a loadout. For quick, benchmark-local
 tools, write a Python module and point a `python:` loadout source at it, the no-toolbase
 escape hatch.
 

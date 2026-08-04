@@ -32,14 +32,14 @@ def _install_fake_toolbase(captured: dict, *, with_overrides: bool):
     config_overrides parameter in toolbase_tools' signature."""
     if with_overrides:
         @contextlib.contextmanager
-        def toolbase_tools(*, profile=None, project_root=None, quiet=False,
+        def toolbase_tools(*, loadout=None, project_root=None, quiet=False,
                            config_overrides=None):
-            captured.update(profile=profile, config_overrides=config_overrides)
+            captured.update(loadout=loadout, config_overrides=config_overrides)
             yield [_tool("kit__alpha"), _tool("kit__beta")]
     else:
         @contextlib.contextmanager
-        def toolbase_tools(*, profile=None, project_root=None, quiet=False):
-            captured.update(profile=profile, config_overrides="UNSUPPORTED")
+        def toolbase_tools(*, loadout=None, project_root=None, quiet=False):
+            captured.update(loadout=loadout, config_overrides="UNSUPPORTED")
             yield [_tool("kit__alpha")]
 
     tb = types.ModuleType("toolbase")
@@ -68,7 +68,7 @@ class TestSandboxScoping(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.sandbox = self._tmp.name
         self.src = Source(backend="toolbase",
-                          config={"profile": "p"}, options={})
+                          config={"loadout": "p"}, options={})
 
     def tearDown(self):
         self._tmp.cleanup()
