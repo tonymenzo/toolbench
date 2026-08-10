@@ -13,10 +13,18 @@ STAGE_ORDER = ["s0", "s1"]
 WEIGHTS = {"s0": 0.4, "s1": 0.6}
 
 
-def _row(model, cond, seed, s0, s1, **extra):
+def _row(model, cond, seed, s0, s1, score=None, **extra):
+    """A trial row. `score` is what the delta is computed from.
+
+    Defaults to the stage-weighted value so the existing cases keep their
+    arithmetic, but it is now an INDEPENDENT field: the delta is the
+    difference of graded scores, not of binary stage outcomes.
+    """
     stages = {"s0": bool(s0), "s1": bool(s1)}
+    if score is None:
+        score = WEIGHTS["s0"] * bool(s0) + WEIGHTS["s1"] * (bool(s0) and bool(s1))
     base = {"model": model, "condition": cond, "seed": seed,
-            "stages": stages, "score": 0.0, "cost_usd": None,
+            "stages": stages, "score": score, "cost_usd": None,
             "wall_clock_s": 1.0, "failure_mode": "NONE"}
     base.update(extra)
     return base
@@ -120,3 +128,56 @@ class TestExcludedFromMetrics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDeltaUsesGradedScore(unittest.TestCase):
+    """The delta must track the graded score, not binary stage outcomes.
+
+    REGRESSION. Reach was previously recomputed here from the stage dict with
+    a cumulative-product absorbing convention, so a single shared early
+    failure zeroed every later stage for BOTH conditions and the per-seed
+    difference was identically 0 -- reporting "no effect" regardless of how
+    far apart the arms were. The 2026-08-10 llp_forward campaign hit exactly
+    this: Dreach +0.00, CI [0.00, 0.00], between cells whose mean scores were
+    0.7978 and 0.9686, because both failed stage 5 of 9.
+    """
+
+    def _rows(self, a_score, b_score):
+        rows = []
+        for seed in (1, 2, 3, 4, 5):
+            # Identical stage dicts, both failing the SAME early stage: the
+            # exact configuration that used to collapse the delta to zero.
+            rows.append(_row("m", "A", seed, s0=1, s1=0, score=a_score))
+            rows.append(_row("m", "B", seed, s0=1, s1=0, score=b_score))
+        return rows
+
+    def test_identical_stages_different_scores_still_gives_a_delta(self):
+        out = _paired_deltas(self._rows(0.7978, 0.9686))
+        self.assertEqual(len(out), 1)
+        d = out[0]
+        self.assertAlmostEqual(d["reach_delta"], 0.9686 - 0.7978, places=4)
+        self.assertNotEqual(d["reach_delta"], 0.0)
+
+    def test_ci_is_not_degenerate_when_scores_vary(self):
+        rows = []
+        for seed, (a, b) in enumerate(
+                [(0.70, 0.98), (0.94, 0.98), (0.95, 0.94), (0.85, 0.97)], 1):
+            rows.append(_row("m", "A", seed, s0=1, s1=0, score=a))
+            rows.append(_row("m", "B", seed, s0=1, s1=0, score=b))
+        d = _paired_deltas(rows)[0]
+        lo, hi = d["reach_delta_ci95"]
+        self.assertLess(lo, hi, "a varying per-seed delta must not give a "
+                                "degenerate CI")
+        self.assertGreater(d["reach_delta"], 0.0)
+
+    def test_absent_stage_dict_does_not_suppress_the_delta(self):
+        """A rubric exposing no stages must still yield an ablation number."""
+        rows = []
+        for seed in (1, 2, 3):
+            rows.append({"model": "m", "condition": "A", "seed": seed,
+                         "score": 0.5, "failure_mode": "NONE"})
+            rows.append({"model": "m", "condition": "B", "seed": seed,
+                         "score": 0.9, "failure_mode": "NONE"})
+        out = _paired_deltas(rows)
+        self.assertEqual(len(out), 1, "no stage dict must not mean no delta")
+        self.assertAlmostEqual(out[0]["reach_delta"], 0.4, places=6)

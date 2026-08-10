@@ -1004,19 +1004,6 @@ def cmd_regrade(args: argparse.Namespace) -> int:
     return 0
 
 
-def _row_reach(stages: dict, stage_order: list[str],
-               weights: list[float]) -> float:
-    """Per-session reach R_j computed from a stages dict (with
-    cumulative-product absorbing convention)."""
-    total = sum(weights) or 1.0
-    cum = 1.0
-    out = 0.0
-    for sid, w in zip(stage_order, weights):
-        passed = 1 if stages.get(sid) else 0
-        cum *= passed
-        out += cum * w
-    return out / total
-
 
 def _partition_resume_rows(existing: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split prior trials.jsonl rows into `(kept, retryable)` for a resume.
@@ -1583,16 +1570,13 @@ def _paired_deltas(trials: list[dict],
     ordered by first appearance in `trials` (i.e. the CLI's order).
     Duplicate (condition, seed) rows are averaged before pairing.
     """
-    if stage_order is None:
-        for t in trials:
-            s = t.get("stages") or {}
-            if s:
-                stage_order = list(s.keys())
-                break
-    if not stage_order:
-        return []
-    weights = ([stage_weights.get(sid, 0.0) for sid in stage_order]
-               if stage_weights is not None else [1.0] * len(stage_order))
+    # `stage_order` / `stage_weights` are vestigial: reach is the trial's
+    # graded score now, so no stage bookkeeping happens here. They are still
+    # ACCEPTED so existing callers keep working, and ignored. Crucially they
+    # must not GATE the computation -- the previous version returned [] when
+    # no stage dict was present, which would silently suppress the headline
+    # ablation number for any rubric that does not expose one.
+    del stage_order, stage_weights
 
     # model -> condition -> seed -> list[(reach, passed)]
     by_model: dict[str, dict[str, dict[object, list[tuple[float, int]]]]] = {}
@@ -1604,7 +1588,17 @@ def _paired_deltas(trials: list[dict],
         cond = t["condition"]
         if cond not in cond_order:
             cond_order.append(cond)
-        reach = _row_reach(t.get("stages") or {}, stage_order, weights)
+        # The trial's CONTINUOUS graded score -- the same quantity the cell
+        # table reports as `mean_score`. It must not be the binary
+        # stage-absorbing reach: with a cumulative-product convention, one
+        # shared early failure zeroes every later stage for BOTH arms, so the
+        # per-seed difference is identically 0 and the delta reports "no
+        # effect" no matter how far apart the arms actually are. On the
+        # 2026-08-10 campaign that produced Dreach +0.00 CI [0.00, 0.00]
+        # between cells whose mean scores were 0.7978 and 0.9686, because both
+        # failed `yield_distance` (stage 5 of 9) and everything downstream was
+        # absorbed to zero in both.
+        reach = float(t.get("score") or 0.0)
         by_model.setdefault(t["model"], {}).setdefault(cond, {}) \
                 .setdefault(seed, []).append((reach, _trial_passed(t, pass_threshold)))
 
