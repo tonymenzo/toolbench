@@ -148,7 +148,7 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
     native_root = Path(native_dir) if native_dir is not None else None
     pointers: list[str] = []
     inline_blocks: list[str] = []
-    agents_lines: list[str] = []
+    agents_blocks: list[tuple[str, str, str, str]] = []
 
     for entry in skills:
         name, src, mode = _parse_entry(entry, loadout_name=loadout_name)
@@ -170,12 +170,11 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
             desc = _frontmatter_description(src)
             pointers.append(f"- {dst.relative_to(sandbox)}: {name}"
                             + (f" — {desc}" if desc else ""))
-            agents_lines.append(
-                f"- `{dst.relative_to(sandbox)}` — {name}"
-                + (f": {desc}" if desc else ""))
+            agents_blocks.append((name, desc, str(dst.relative_to(sandbox)),
+                                  _strip_frontmatter(src.read_text())))
 
-    if agents_lines:
-        _write_agents_pointer(sandbox, agents_lines)
+    if agents_blocks:
+        _write_agents_doc(sandbox, agents_blocks)
 
     parts: list[str] = []
     if pointers:
@@ -188,31 +187,55 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
     return "\n\n".join(parts)
 
 
-def _write_agents_pointer(sandbox: Path, lines: list[str]) -> None:
-    """Advertise the guides in `<sandbox>/AGENTS.md` as well as the prompt.
+def _strip_frontmatter(text: str) -> str:
+    """The document body, without its YAML frontmatter block."""
+    if not text.lstrip().startswith("---"):
+        return text.strip()
+    body = text.lstrip()[3:]
+    end = body.find("\n---")
+    return (body[end + 4:] if end != -1 else body).strip()
+
+
+def _write_agents_doc(sandbox: Path, blocks) -> None:
+    """Deliver the guides IN FULL via `<sandbox>/AGENTS.md`.
 
     AGENTS.md is codex's only MODEL-FACING instruction channel: it is
     auto-injected into every session (verified against codex-cli 0.146.0),
     whereas `~/.codex/prompts/` entries are user-typed `/slash` commands and
     so are unreachable in a headless `codex exec` benchmark run.
 
-    A POINTER, not the body. That keeps the semantics equivalent to a native
-    claude_code skill -- the description is always visible, the body is read
-    on demand -- rather than turning the guide into `inline`, which would be
-    always-in-context and a different measurement. `mode: inline` remains the
-    way to ask for guaranteed delivery.
+    THE BODY, not a pointer. A pointer would leave "did the agent choose to
+    open the file" inside the measurement, and on the 2026-08-10 gpt-5.6 run
+    that nuisance variable dominated: the guide was never opened at all. What
+    the ablation is meant to isolate is whether the bundle's KNOWLEDGE helps,
+    and the no-tools arm receives nothing either way, so injecting the body
+    makes the within-model delta measure exactly that.
+
+    It does mean a runtime WITHOUT a native skill mechanism receives the
+    guidance unconditionally, while one WITH it (claude_code) still loads the
+    body on invocation. That asymmetry is real and is a property of the
+    harnesses, not of this code: each delivers the bundle through the
+    strongest channel it has. It must be stated when deltas from two runtimes
+    are compared -- and `mode: inline` on both is the way to make them
+    symmetric if that comparison is load-bearing.
 
     Appends to an existing AGENTS.md rather than clobbering it: a benchmark's
     sandbox template may legitimately ship one, and silently replacing it
     would remove task material.
     """
     doc = sandbox / "AGENTS.md"
-    block = ("\n## Reference guides available in this workspace\n\n"
-             "Read these when they are relevant to the task; they are "
-             "reference material, not instructions to follow blindly.\n\n"
-             + "\n".join(lines) + "\n")
+    parts = ["## Reference guides for this workspace\n",
+             "The following material is provided with your toolset. It is "
+             "reference documentation, not instructions to follow blindly; "
+             "apply the parts that bear on the task.\n"]
+    for name, desc, rel, body in blocks:
+        parts.append(f"\n### {name}\n")
+        if desc:
+            parts.append(f"_{desc}_\n")
+        parts.append(f"\n(Also on disk at `{rel}`.)\n\n{body}\n")
+    block = "\n".join(parts)
     prior = doc.read_text() if doc.is_file() else ""
-    doc.write_text(prior + block if prior else block.lstrip("\n"))
+    doc.write_text((prior.rstrip() + "\n\n" + block) if prior else block)
 
 
 def skill_names(skills: list) -> list[str]:

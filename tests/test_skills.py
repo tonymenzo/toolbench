@@ -302,16 +302,27 @@ class TestAgentsPointerForCodex(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def test_pointer_written_to_agents_md(self):
+    def test_guide_is_delivered_in_full(self):
+        """The BODY, not a pointer.
+
+        A pointer leaves "did the agent open the file" inside the
+        measurement; on the 2026-08-10 gpt-5.6 run the guide was never opened
+        at all. The no-tools arm receives nothing either way, so injecting the
+        body makes the within-model delta isolate the knowledge itself.
+        """
         prepare_skills(self.entry, self.sandbox)
         doc = (self.sandbox / "AGENTS.md").read_text()
-        self.assertIn("skills/guide.md", doc)
-        self.assertIn("How to do the thing", doc)
+        self.assertIn("BODY-TEXT", doc)            # the guide itself
+        self.assertIn("How to do the thing", doc)  # its description
+        self.assertIn("skills/guide.md", doc)      # still discoverable on disk
 
-    def test_body_is_not_inlined(self):
-        """Pointer semantics, not `inline` -- the body stays on disk."""
+    def test_frontmatter_is_not_pasted_into_agents_md(self):
+        """Raw YAML would render as prose and read as instructions."""
+        doc = (self.sandbox / "AGENTS.md")
         prepare_skills(self.entry, self.sandbox)
-        self.assertNotIn("BODY-TEXT", (self.sandbox / "AGENTS.md").read_text())
+        text = doc.read_text()
+        self.assertNotIn("name: G", text)
+        self.assertNotIn("---", text.split("BODY-TEXT")[0][-40:])
 
     def test_existing_agents_md_is_appended_not_clobbered(self):
         (self.sandbox / "AGENTS.md").write_text("# Task rules\nKeep these.\n")
