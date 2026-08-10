@@ -340,3 +340,43 @@ class TestAgentsPointerForCodex(unittest.TestCase):
     def test_inline_mode_writes_no_agents_md(self):
         prepare_skills([{**self.entry[0], "mode": "inline"}], self.sandbox)
         self.assertFalse((self.sandbox / "AGENTS.md").exists())
+
+
+class TestLoadoutSystemPromptAddendum(unittest.TestCase):
+    """The bundle's framing reaches only the arm that has the bundle.
+
+    A no-tools arm must never receive prose describing tools it does not
+    have -- that would both confuse the agent and contaminate the control.
+    """
+
+    def test_addendum_parsed_from_loadout(self):
+        from toolbench.core.loadout import Loadout
+        lo = Loadout.from_dict({"name": "t", "system_prompt_addendum":
+                                "  Prefer the toolkit.  "})
+        self.assertEqual(lo.system_prompt_addendum, "Prefer the toolkit.")
+
+    def test_absent_addendum_is_empty_not_none(self):
+        from toolbench.core.loadout import Loadout
+        for data in ({"name": "c"}, {"name": "c", "system_prompt_addendum": None}):
+            self.assertEqual(Loadout.from_dict(data).system_prompt_addendum, "")
+
+    def test_real_loadouts_only_the_tools_arm_carries_one(self):
+        """Guards the control: core_only must stay unframed."""
+        import yaml
+        from pathlib import Path as P
+        d = P("/Users/ynot/code/research/hepbench/benchmarks/llp_forward/loadouts")
+        if not d.is_dir():
+            self.skipTest("hepbench benchmark not present")
+        for f in d.glob("*.yaml"):
+            cfg = yaml.safe_load(f.read_text()) or {}
+            add = (cfg.get("system_prompt_addendum") or "").strip()
+            if f.stem.startswith("core_only"):
+                self.assertEqual(add, "", f"{f.stem} must not be framed")
+            if add:
+                # must not leak method: no tool names, no physics
+                low = add.lower()
+                for banned in ("productionspectrum", "mesondecay",
+                               "decayinvolume", "pythia", "charmonium",
+                               "softqcd", "n_strata"):
+                    self.assertNotIn(banned, low,
+                                     f"{f.stem} addendum leaks {banned!r}")

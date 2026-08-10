@@ -461,6 +461,12 @@ class TrialRunner:
             _isolate_project_root(sandbox_dir)
         native_skills_dir = (Path(sandbox_dir) / ".claude" / "skills"
                              if harness.runtime_name == "claude_code" else None)
+        # The loadout's own framing, for THIS arm only. Applied before the
+        # skills pointer so the agent learns the toolset exists before it is
+        # told where the guides are.
+        if loadout.system_prompt_addendum:
+            system_prompt = (f"{system_prompt}\n\n"
+                             f"{loadout.system_prompt_addendum}")
         skills_addendum = prepare_skills(loadout.skills, sandbox_dir,
                                          loadout_name=loadout.name,
                                          native_dir=native_skills_dir)
@@ -915,6 +921,10 @@ class TrialRunner:
                 },
                 "loadout": loadout.name,
                 "skills": skill_names(loadout.skills),
+                # Recorded verbatim: it is part of the measured treatment, and
+                # a reader comparing two campaigns must be able to see whether
+                # an arm was framed to reach for its tools.
+                "system_prompt_addendum": loadout.system_prompt_addendum,
                 "variant": {
                     "name": variant.name,
                     "description": variant.description,
