@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "toolbench"
-version = "0.6.0"
+version = "0.7.0"
 description = "A platform and CLI for building benchmarks for agentic tools and harnesses."
 readme = "README.md"
 requires-python = ">=3.12"

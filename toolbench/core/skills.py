@@ -60,19 +60,60 @@ def _parse_entry(entry: dict, *, loadout_name: str) -> tuple[str, Path, str]:
     return str(name), Path(str(file)), mode
 
 
+def _write_native_skill(root: Path, name: str, src: Path,
+                        loadout_name: str) -> None:
+    """Materialize one skill as a PROJECT-scoped Claude Code skill.
+
+    Writes `<root>/<name>/SKILL.md`, which the CLI discovers under `project`
+    setting scope because the sandbox is the trial's cwd. The model then sees
+    the skill's `description` without opening anything — the whole reason to
+    prefer this over a filename pointer.
+
+    The directory name is what the CLI lists the skill as; a `name:` in the
+    frontmatter does not override it. Frontmatter is otherwise passed through
+    untouched (extra keys such as a toolkit's `bundle:` are harmless), and
+    synthesized when the source has none, since the CLI requires it.
+    """
+    dst_dir = root / name
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    text = src.read_text()
+    if not text.lstrip().startswith("---"):
+        where = f" (from the {loadout_name} loadout)" if loadout_name else ""
+        text = (f"---\nname: {name}\n"
+                f"description: Guidance bundled with this toolset{where}.\n"
+                f"---\n\n{text}")
+    (dst_dir / "SKILL.md").write_text(text)
+
+
 def prepare_skills(skills: list, sandbox_dir: str | Path, *,
-                   loadout_name: str = "") -> str:
+                   loadout_name: str = "", native_dir: str | Path | None = None) -> str:
     """Materialize a loadout's skills for one trial.
 
-    Copies `on_demand` skills into `<sandbox>/skills/<name><ext>` and
-    returns the system-prompt addendum covering both modes ('' when the
-    loadout has no skills). Raises on a missing file or malformed entry
-    — a skill the loadout declares but the agent never receives would
-    corrupt the measurement silently.
+    Returns the system-prompt addendum ('' when there is nothing to add).
+    Raises on a missing file or malformed entry — a skill the loadout declares
+    but the agent never receives would corrupt the measurement silently.
+
+    `inline` skills are always embedded in the system prompt. `on_demand`
+    skills are delivered one of two ways:
+
+    - `native_dir` set (the runner passes `<sandbox>/.claude/skills` for
+      runtimes that drive the Claude Code CLI): written as real project-scoped
+      skills, so the CLI surfaces each one's name AND description to the model
+      and the agent can invoke it. No prompt addendum is needed or emitted —
+      the harness's own skill machinery does the advertising.
+    - otherwise: copied to `<sandbox>/skills/<name><ext>` with a one-line
+      pointer appended to the system prompt. This is the portable fallback for
+      runtimes with no skill concept; it relies on the agent choosing to read
+      a file it can only identify by name, so prefer the native path where the
+      runtime supports it.
+
+    Both paths keep skills PER-TRIAL and PER-ARM, which is the property that
+    matters: a skill must reach exactly the arm whose loadout declares it.
     """
     if not skills:
         return ""
     sandbox = Path(sandbox_dir)
+    native_root = Path(native_dir) if native_dir is not None else None
     pointers: list[str] = []
     inline_blocks: list[str] = []
 
@@ -87,7 +128,9 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
             inline_blocks.append(
                 f"### Skill: {name}\n{src.read_text().strip()}"
             )
-        else:  # on_demand
+        elif native_root is not None:
+            _write_native_skill(native_root, name, src, loadout_name)
+        else:  # on_demand, portable fallback
             dst = sandbox / SKILLS_SUBDIR / f"{name}{src.suffix or '.md'}"
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)

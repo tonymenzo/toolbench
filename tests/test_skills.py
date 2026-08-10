@@ -53,6 +53,57 @@ class TestPrepareSkills(unittest.TestCase):
         self.assertIn("Use add() then power()", addendum)
         self.assertFalse((self.sandbox / "skills").exists())
 
+    # ── native delivery (runtimes with a real skill concept) ──────────────
+
+    def _native(self):
+        return self.sandbox / ".claude" / "skills"
+
+    def test_native_writes_a_project_skill_and_no_pointer(self):
+        """The CLI advertises name+description itself, so no addendum."""
+        addendum = prepare_skills([self._entry()], self.sandbox,
+                                  native_dir=self._native())
+        doc = self._native() / "recipe" / "SKILL.md"
+        self.assertTrue(doc.is_file())
+        self.assertIn("Use add()", doc.read_text())
+        self.assertEqual(addendum, "")
+        # and NOT the pointer-style copy
+        self.assertFalse((self.sandbox / "skills").exists())
+
+    def test_native_synthesizes_frontmatter_when_absent(self):
+        """The CLI requires frontmatter; the source here has none."""
+        prepare_skills([self._entry()], self.sandbox,
+                       loadout_name="tools_x", native_dir=self._native())
+        text = (self._native() / "recipe" / "SKILL.md").read_text()
+        self.assertTrue(text.lstrip().startswith("---"))
+        self.assertIn("name: recipe", text)
+        self.assertIn("description:", text)
+
+    def test_native_passes_existing_frontmatter_through(self):
+        self.skill_file.write_text(
+            "---\nname: Long Human Name\ndescription: What it is for.\n"
+            "bundle: llp\n---\n\nBody here.\n")
+        prepare_skills([self._entry()], self.sandbox,
+                       native_dir=self._native())
+        text = (self._native() / "recipe" / "SKILL.md").read_text()
+        # untouched, extra keys included — the directory name is what the CLI
+        # lists the skill as, so a spaced `name:` is harmless
+        self.assertIn("name: Long Human Name", text)
+        self.assertIn("bundle: llp", text)
+        self.assertIn("Body here.", text)
+
+    def test_native_is_per_trial_not_global(self):
+        """The skill must land under the sandbox and nowhere else."""
+        prepare_skills([self._entry()], self.sandbox,
+                       native_dir=self._native())
+        doc = (self._native() / "recipe" / "SKILL.md").resolve()
+        self.assertTrue(str(doc).startswith(str(self.sandbox.resolve())))
+
+    def test_inline_still_inlines_even_with_native_dir(self):
+        addendum = prepare_skills([self._entry(mode="inline")], self.sandbox,
+                                  native_dir=self._native())
+        self.assertIn("Use add() then power()", addendum)
+        self.assertFalse(self._native().exists())
+
     def test_missing_file_raises(self):
         with self.assertRaises(FileNotFoundError):
             prepare_skills([self._entry(file="/nope/skill.md")], self.sandbox)

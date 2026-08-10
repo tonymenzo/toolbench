@@ -414,11 +414,23 @@ class TrialRunner:
         prompt_base = variant.read_user_prompt()
         system_prompt = variant.read_system_prompt() or DEFAULT_SYSTEM_PROMPT
         # Loadout skills: tool-use guidance that travels with the loadout.
-        # on_demand skills land in <sandbox>/skills/ with a prompt pointer;
-        # inline skills are embedded. Strict: a declared-but-missing skill
-        # raises here rather than silently running a thinner arm.
+        # inline skills are embedded in the system prompt. on_demand skills go
+        # native where the runtime has a skill concept — claude_code drives the
+        # real CLI, which discovers <cwd>/.claude/skills/ under `project`
+        # setting scope, so writing there surfaces each skill's description to
+        # the model instead of a bare filename it cannot judge. Other runtimes
+        # fall back to <sandbox>/skills/ plus a prompt pointer.
+        #
+        # Either way delivery stays PER-ARM: the skill lands in this trial's
+        # sandbox only, so it reaches exactly the arm whose loadout declares
+        # it. (That is also why ~/.claude/skills must not be in scope — see the
+        # --setting-sources note in runtime.py.) Strict: a declared-but-missing
+        # skill raises here rather than silently running a thinner arm.
+        native_skills_dir = (Path(sandbox_dir) / ".claude" / "skills"
+                             if harness.runtime_name == "claude_code" else None)
         skills_addendum = prepare_skills(loadout.skills, sandbox_dir,
-                                         loadout_name=loadout.name)
+                                         loadout_name=loadout.name,
+                                         native_dir=native_skills_dir)
         if skills_addendum:
             system_prompt = f"{system_prompt}\n\n{skills_addendum}"
 

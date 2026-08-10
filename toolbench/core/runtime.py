@@ -490,6 +490,18 @@ class ClaudeCodeAgent:
         cmd += [
             "--allowedTools", allowed,
             "--permission-mode", "acceptEdits",
+            # HERMETIC SETTINGS — correctness-critical, hence hardcoded here
+            # rather than exposed as a harness knob. Without it the CLI loads
+            # its DEFAULT setting sources, user level included, so every guide
+            # in ~/.claude/skills/ is surfaced to the model in EVERY arm of
+            # every run. Anything a past `tb connect` left behind, or that the
+            # operator hand-wrote, silently joins the measured configuration:
+            # a core_only arm receives domain guidance it is defined not to
+            # have, and nothing in the manifest records it. `project` keeps the
+            # CLI's built-in skills and whatever the runner materialises INTO
+            # the sandbox — the sandbox is the trial's cwd, so it is project
+            # scope — while dropping the machine's ambient state.
+            "--setting-sources", "project",
             # stream-json (NDJSON) lets us record each tool call onto the
             # trajectory AS IT HAPPENS, so the trial's console.log + transcript
             # show the live tool-call timeline (same format as orchestral) and
