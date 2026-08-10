@@ -141,6 +141,39 @@ class TrialResult:
 #   - ux_feedback (bool, default off): issue one post-completion, UNSCORED
 #     turn asking the agent to critique the tools it was given. A tool-
 #     development aid, not a benchmark condition; see `_UX_FEEDBACK_PROMPT`.
+def _git_object_stores(benchmark_dir) -> list[str]:
+    """`.git` of every repo containing a benchmark, as deny-read paths.
+
+    Deny-reading the benchmark DIRECTORY does not protect the answer key: git
+    keeps a second copy of every tracked file in `.git/objects`, and
+    `git show HEAD:<path>` reads it without ever touching the working tree.
+
+    Observed, not hypothesised. A 2026-08-10 haiku trial ran
+
+        cd <repo> && git show HEAD:benchmarks/llp_forward/soln/truth.json
+
+    together with `git ls-tree HEAD .../soln/` and `git log --all --follow`,
+    none of which the filesystem policy stopped. The integrity scanner caught
+    it after the fact on the `soln/` marker, but detection is not containment.
+
+    NOTE the residual gap this does NOT close: the Seatbelt policy confines
+    Bash and its children only, so a harness's own file-reading tool can still
+    reach outside the sandbox. The same trial read `analysis/notes/*.tex` that
+    way. Closing that needs harness-level path restriction, not a deny list.
+    """
+    out: list[str] = []
+    dirs = (benchmark_dir if isinstance(benchmark_dir, list)
+            else [benchmark_dir]) if benchmark_dir else []
+    for d in dirs:
+        p = Path(str(d)).resolve()
+        for cand in [p, *p.parents]:
+            g = cand / ".git"
+            if g.exists():
+                out.append(str(g))
+                break
+    return sorted(set(out))
+
+
 def _isolate_project_root(sandbox_dir) -> None:
     """Make a trial sandbox its own project root for the Claude Code CLI.
 
@@ -554,6 +587,7 @@ class TrialRunner:
                         ((benchmark_dir if isinstance(benchmark_dir, list)
                           else [benchmark_dir]) if benchmark_dir else [])
                         + _toolbase_protected_paths()
+                        + _git_object_stores(benchmark_dir)
                     ),
                 )
                 # One resume loop over the SAME agent / sandbox / context.
