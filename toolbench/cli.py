@@ -517,6 +517,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "run_id": run_id,
         "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "git_sha": _git_sha(),
+        "benchmark_git_sha": _git_sha(bench_dir),
+        "environment": _environment_record(),
         "benchmark": bench_name,
         "benchmark_dir": str(bench_dir),
         # `extends:` provenance: the parent dir and the post-merge config
@@ -1924,13 +1926,70 @@ def _count_failures(rows: list[dict]) -> dict[str, int]:
     return out
 
 
-def _git_sha() -> str:
+def _git_sha(cwd=None) -> str:
+    """HEAD of the framework checkout, or of `cwd` when given.
+
+    The framework SHA alone is not the run's provenance: the BENCHMARK lives in
+    a different repo (its prompts, rubric and ground truth are what the scores
+    are computed against), so the manifest records both. Degrades to "unknown"
+    for a wheel install or a non-repo directory rather than failing the run.
+    """
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT
+            ["git", "rev-parse", "HEAD"], cwd=str(cwd or REPO_ROOT),
+            stderr=subprocess.DEVNULL,
         ).decode().strip()
     except Exception:
         return "unknown"
+
+
+#: Probed for the manifest's `environment` block. Deliberately a fixed list
+#: rather than "everything installed": a full pip freeze is unreadable and
+#: changes for reasons that have nothing to do with the science, while these
+#: are the packages a numerical result can actually turn on.
+_ENV_PACKAGES = (
+    "numpy", "scipy", "matplotlib", "pandas", "sympy",
+    "pythia8", "pythia8mc", "ROOT", "uproot", "awkward", "pyhepmc",
+)
+
+
+def _environment_record() -> dict:
+    """The ambient stack a trial can reach, for the run record.
+
+    WHY THIS EXISTS. A tools arm reaches into a pinned, versioned toolkit venv
+    whose version the manifest already records. A NO-TOOLS arm reaches into
+    whatever the machine happens to have -- and that is just as much part of
+    the measured configuration, because the control arm's capability rests on
+    it entirely. Leaving it unrecorded makes the control uncontrolled: a
+    2026-08 campaign ran its two arms against DIFFERENT Pythia versions, and a
+    third built the reference, with nothing in the run record to show it.
+
+    This does not make an ambient environment hermetic; it makes it auditable,
+    which is the part a reader needs to reproduce or discount a result.
+
+    LIMITATION: versions come from installed-distribution metadata, so a conda
+    package that ships none (ROOT is the usual case) is absent even when it is
+    importable. `conda_prefix` is recorded so that environment can still be
+    reconstructed. Absence here means "not pip-visible", NOT "not installed".
+    """
+    import platform
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+    packages = {}
+    for name in _ENV_PACKAGES:
+        try:
+            packages[name] = _pkg_version(name)
+        except PackageNotFoundError:
+            continue
+        except Exception:
+            packages[name] = "unknown"
+    return {
+        "python": platform.python_version(),
+        "python_executable": sys.executable,
+        "platform": platform.platform(),
+        "packages": packages,
+        "conda_prefix": os.environ.get("CONDA_PREFIX", ""),
+    }
 
 
 def _file_sha(path: Path) -> str:
