@@ -233,3 +233,49 @@ class TestSandboxProjectRootIsolation(unittest.TestCase):
         finally:
             runner_mod.subprocess.run = real
         self.assertTrue((self.sandbox / ".git").is_dir())
+
+
+class TestPointerCarriesDescription(unittest.TestCase):
+    """Runtimes without a native skill concept must still get a useful pointer.
+
+    codex has no model-facing skill mechanism, so the prompt pointer is the
+    ONLY signal it gets. Emitting just the slug ("- skills/x.md: x") tells the
+    agent nothing about whether to open the file, which turns "does the guide
+    help" into "does the agent gamble on an unlabelled filename".
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.sandbox = self.root / "sandbox"
+        self.sandbox.mkdir()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _skill(self, text):
+        p = self.root / "guide.md"
+        p.write_text(text)
+        return [{"name": "guide", "file": str(p)}]
+
+    def test_description_is_carried_into_the_pointer(self):
+        add = prepare_skills(self._skill(
+            "---\nname: A Guide\ndescription: Process selection and the traps"
+            " that rescale a result.\n---\n\nBody.\n"), self.sandbox)
+        self.assertIn("skills/guide.md", add)
+        self.assertIn("Process selection and the traps", add)
+
+    def test_missing_or_malformed_frontmatter_degrades_quietly(self):
+        for text in ("no frontmatter at all\n",
+                     "---\nname: only a name\n---\nbody\n",
+                     "---\nunterminated: block\n"):
+            add = prepare_skills(self._skill(text), self.sandbox)
+            self.assertIn("skills/guide.md", add)       # pointer still emitted
+            self.assertNotIn("None", add)
+
+    def test_native_delivery_needs_no_pointer(self):
+        """Native runtimes surface the description themselves."""
+        add = prepare_skills(self._skill(
+            "---\nname: A\ndescription: D.\n---\nbody\n"), self.sandbox,
+            native_dir=self.sandbox / ".claude" / "skills")
+        self.assertEqual(add, "")

@@ -60,6 +60,38 @@ def _parse_entry(entry: dict, *, loadout_name: str) -> tuple[str, Path, str]:
     return str(name), Path(str(file)), mode
 
 
+def _frontmatter_description(src: Path) -> str:
+    """The skill's `description:` from its YAML frontmatter, if it has one.
+
+    Runtimes with a native skill concept surface this themselves. Runtimes
+    without one (codex) get only the prompt pointer, and a pointer that reads
+    "- skills/pythia_forward_run_cards.md: pythia_forward_run_cards" tells the
+    agent nothing about whether the file is worth opening -- it is the slug
+    twice. Carrying the description across makes the decision informed rather
+    than a coin flip, which is the difference between measuring whether
+    guidance helps and measuring whether an agent gambles on unlabelled files.
+
+    Parsed without a YAML dependency: the block is a leading `---` fence and
+    the field is a single line. Anything unexpected yields "" rather than
+    raising -- a pointer is a convenience, never a reason to fail a trial.
+    """
+    try:
+        text = src.read_text()
+    except Exception:
+        return ""
+    if not text.lstrip().startswith("---"):
+        return ""
+    body = text.lstrip()[3:]
+    end = body.find("\n---")
+    if end == -1:
+        return ""
+    for line in body[:end].splitlines():
+        if line.strip().lower().startswith("description:"):
+            desc = line.split(":", 1)[1].strip().strip('"\'')
+            return " ".join(desc.split())
+    return ""
+
+
 def _write_native_skill(root: Path, name: str, src: Path,
                         loadout_name: str) -> None:
     """Materialize one skill as a PROJECT-scoped Claude Code skill.
@@ -134,7 +166,9 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
             dst = sandbox / SKILLS_SUBDIR / f"{name}{src.suffix or '.md'}"
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
-            pointers.append(f"- {dst.relative_to(sandbox)}: {name}")
+            desc = _frontmatter_description(src)
+            pointers.append(f"- {dst.relative_to(sandbox)}: {name}"
+                            + (f" — {desc}" if desc else ""))
 
     parts: list[str] = []
     if pointers:
