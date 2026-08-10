@@ -13,6 +13,7 @@ usage from `agent.context`, grades the result with a benchmark-aware
 import datetime
 import os
 import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -140,6 +141,36 @@ class TrialResult:
 #   - ux_feedback (bool, default off): issue one post-completion, UNSCORED
 #     turn asking the agent to critique the tools it was given. A tool-
 #     development aid, not a benchmark condition; see `_UX_FEEDBACK_PROMPT`.
+def _isolate_project_root(sandbox_dir) -> None:
+    """Make a trial sandbox its own project root for the Claude Code CLI.
+
+    Trial sandboxes normally live INSIDE the benchmark repo (`runs/<id>/...`),
+    and the CLI resolves project-scoped settings and skills from the enclosing
+    project root — so the repo's own `.claude/skills/` is inherited by every
+    trial. In hepbench that meant a guide describing the benchmark system, its
+    layout and where `ground_truth/` lives, reaching every arm of every run,
+    unrecorded in the manifest. `--setting-sources project` does not help: the
+    repo's skills ARE project scope from the sandbox's point of view.
+
+    A `.git` in the sandbox stops the walk-up (verified against the live CLI:
+    the enclosing repo's skill disappears while the sandbox's own remains).
+    A real `git init` is used rather than a bare marker directory so that any
+    `git` the agent happens to run behaves sanely instead of failing with
+    "not a git repository"; the marker is only a fallback when git is absent.
+
+    Idempotent, and never touches an existing repo.
+    """
+    sandbox = Path(sandbox_dir)
+    if (sandbox / ".git").exists():
+        return
+    try:
+        subprocess.run(["git", "init", "-q", str(sandbox)], check=True,
+                       capture_output=True, timeout=30)
+    except Exception:
+        # git missing or refused: the marker alone still blocks inheritance.
+        (sandbox / ".git").mkdir(parents=True, exist_ok=True)
+
+
 def _is_subscription(harness) -> bool:
     """Does this harness run under a subscription rather than metered API use?
 
@@ -426,6 +457,8 @@ class TrialRunner:
         # it. (That is also why ~/.claude/skills must not be in scope — see the
         # --setting-sources note in runtime.py.) Strict: a declared-but-missing
         # skill raises here rather than silently running a thinner arm.
+        if harness.runtime_name == "claude_code":
+            _isolate_project_root(sandbox_dir)
         native_skills_dir = (Path(sandbox_dir) / ".claude" / "skills"
                              if harness.runtime_name == "claude_code" else None)
         skills_addendum = prepare_skills(loadout.skills, sandbox_dir,

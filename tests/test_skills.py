@@ -185,3 +185,51 @@ class TestSkillsReachTheAgent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSandboxProjectRootIsolation(unittest.TestCase):
+    """A trial sandbox must not inherit the enclosing repo's project skills.
+
+    Sandboxes live inside the benchmark repo (`runs/<id>/trials/<t>/sandbox`),
+    and the Claude Code CLI resolves project scope from the enclosing project
+    root — so the repo's own `.claude/skills/` reached every arm of every run.
+    `--setting-sources project` does not help: from the sandbox's point of view
+    those ARE project scope. A `.git` in the sandbox stops the walk-up.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.sandbox = Path(self._tmp.name) / "sandbox"
+        self.sandbox.mkdir()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_creates_a_project_root_marker(self):
+        from toolbench.core.runner import _isolate_project_root
+        _isolate_project_root(self.sandbox)
+        self.assertTrue((self.sandbox / ".git").exists())
+
+    def test_is_idempotent_and_leaves_an_existing_repo_alone(self):
+        from toolbench.core.runner import _isolate_project_root
+        git = self.sandbox / ".git"
+        git.mkdir()
+        (git / "SENTINEL").write_text("preexisting")
+        _isolate_project_root(self.sandbox)
+        self.assertEqual((git / "SENTINEL").read_text(), "preexisting")
+
+    def test_falls_back_to_a_bare_marker_without_git(self):
+        """git absent must not fail the trial — the marker alone suffices."""
+        import toolbench.core.runner as runner_mod
+        from toolbench.core.runner import _isolate_project_root
+        real = runner_mod.subprocess.run
+
+        def boom(*a, **k):
+            raise FileNotFoundError("git")
+
+        runner_mod.subprocess.run = boom
+        try:
+            _isolate_project_root(self.sandbox)
+        finally:
+            runner_mod.subprocess.run = real
+        self.assertTrue((self.sandbox / ".git").is_dir())
