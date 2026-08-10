@@ -279,3 +279,53 @@ class TestPointerCarriesDescription(unittest.TestCase):
             "---\nname: A\ndescription: D.\n---\nbody\n"), self.sandbox,
             native_dir=self.sandbox / ".claude" / "skills")
         self.assertEqual(add, "")
+
+
+class TestAgentsPointerForCodex(unittest.TestCase):
+    """codex's only model-facing channel is an auto-injected AGENTS.md.
+
+    Its `~/.codex/prompts/` entries are user-typed slash commands, unreachable
+    in a headless `codex exec` run, so without this a codex trial's only
+    signal was a line buried in the first-turn prompt.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.sandbox = self.root / "sandbox"
+        self.sandbox.mkdir()
+        self.src = self.root / "guide.md"
+        self.src.write_text("---\nname: G\ndescription: How to do the thing.\n"
+                            "---\n\nBODY-TEXT\n")
+        self.entry = [{"name": "guide", "file": str(self.src)}]
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_pointer_written_to_agents_md(self):
+        prepare_skills(self.entry, self.sandbox)
+        doc = (self.sandbox / "AGENTS.md").read_text()
+        self.assertIn("skills/guide.md", doc)
+        self.assertIn("How to do the thing", doc)
+
+    def test_body_is_not_inlined(self):
+        """Pointer semantics, not `inline` -- the body stays on disk."""
+        prepare_skills(self.entry, self.sandbox)
+        self.assertNotIn("BODY-TEXT", (self.sandbox / "AGENTS.md").read_text())
+
+    def test_existing_agents_md_is_appended_not_clobbered(self):
+        (self.sandbox / "AGENTS.md").write_text("# Task rules\nKeep these.\n")
+        prepare_skills(self.entry, self.sandbox)
+        doc = (self.sandbox / "AGENTS.md").read_text()
+        self.assertIn("Keep these.", doc)      # task material survives
+        self.assertIn("skills/guide.md", doc)
+
+    def test_native_runtime_writes_no_agents_md(self):
+        """claude_code surfaces skills itself; a second channel would double."""
+        prepare_skills(self.entry, self.sandbox,
+                       native_dir=self.sandbox / ".claude" / "skills")
+        self.assertFalse((self.sandbox / "AGENTS.md").exists())
+
+    def test_inline_mode_writes_no_agents_md(self):
+        prepare_skills([{**self.entry[0], "mode": "inline"}], self.sandbox)
+        self.assertFalse((self.sandbox / "AGENTS.md").exists())

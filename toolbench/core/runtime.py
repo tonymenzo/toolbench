@@ -911,6 +911,36 @@ class CodexAgent:
         cmd += [prompt]
         return cmd
 
+    def _isolated_codex_home(self) -> str:
+        """A per-trial CODEX_HOME holding only what auth needs.
+
+        HERMETIC INSTRUCTIONS. Codex auto-injects `$CODEX_HOME/AGENTS.md` into
+        every session as model-facing instructions, and `--ignore-user-config`
+        does NOT suppress it -- verified against codex-cli 0.146.0, as were
+        `project_doc_max_bytes=0` and `experimental_instructions_file=""`,
+        which also leave it in place. So anything in the operator's
+        ~/.codex/AGENTS.md would join the measured configuration of every arm
+        of every run, unrecorded: exactly the hazard ~/.claude/skills posed for
+        the claude_code runtime. Pointing CODEX_HOME at a per-trial directory
+        is the only thing found to block it (same probe, answer flips YES->NO),
+        and it drops personal MCP servers and model defaults with it.
+
+        auth.json is SYMLINKED rather than copied so a token refresh during a
+        long campaign writes through to the real file instead of expiring
+        inside a throwaway directory.
+        """
+        home = Path(self.sandbox_dir).parent / ".codex_home"
+        home.mkdir(parents=True, exist_ok=True)
+        real = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        link = home / "auth.json"
+        src = real / "auth.json"
+        if src.exists() and not link.exists():
+            try:
+                link.symlink_to(src)
+            except OSError:
+                shutil.copy2(src, link)     # symlinks unavailable: copy
+        return str(home)
+
     def _protected_path_config_args(self) -> list[str]:
         """Build a native Codex permission profile with unreadable paths.
 
@@ -1046,6 +1076,7 @@ class CodexAgent:
         # Subscription auth via the logged-in CLI: never inject an API key.
         env = dict(os.environ)
         env.pop("OPENAI_API_KEY", None)
+        env["CODEX_HOME"] = self._isolated_codex_home()
         _apply_harness_env(env, self.harness_env)
 
         proc = subprocess.Popen(

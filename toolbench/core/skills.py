@@ -148,6 +148,7 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
     native_root = Path(native_dir) if native_dir is not None else None
     pointers: list[str] = []
     inline_blocks: list[str] = []
+    agents_lines: list[str] = []
 
     for entry in skills:
         name, src, mode = _parse_entry(entry, loadout_name=loadout_name)
@@ -169,6 +170,12 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
             desc = _frontmatter_description(src)
             pointers.append(f"- {dst.relative_to(sandbox)}: {name}"
                             + (f" — {desc}" if desc else ""))
+            agents_lines.append(
+                f"- `{dst.relative_to(sandbox)}` — {name}"
+                + (f": {desc}" if desc else ""))
+
+    if agents_lines:
+        _write_agents_pointer(sandbox, agents_lines)
 
     parts: list[str] = []
     if pointers:
@@ -179,6 +186,33 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
     if inline_blocks:
         parts.append("\n\n".join(inline_blocks))
     return "\n\n".join(parts)
+
+
+def _write_agents_pointer(sandbox: Path, lines: list[str]) -> None:
+    """Advertise the guides in `<sandbox>/AGENTS.md` as well as the prompt.
+
+    AGENTS.md is codex's only MODEL-FACING instruction channel: it is
+    auto-injected into every session (verified against codex-cli 0.146.0),
+    whereas `~/.codex/prompts/` entries are user-typed `/slash` commands and
+    so are unreachable in a headless `codex exec` benchmark run.
+
+    A POINTER, not the body. That keeps the semantics equivalent to a native
+    claude_code skill -- the description is always visible, the body is read
+    on demand -- rather than turning the guide into `inline`, which would be
+    always-in-context and a different measurement. `mode: inline` remains the
+    way to ask for guaranteed delivery.
+
+    Appends to an existing AGENTS.md rather than clobbering it: a benchmark's
+    sandbox template may legitimately ship one, and silently replacing it
+    would remove task material.
+    """
+    doc = sandbox / "AGENTS.md"
+    block = ("\n## Reference guides available in this workspace\n\n"
+             "Read these when they are relevant to the task; they are "
+             "reference material, not instructions to follow blindly.\n\n"
+             + "\n".join(lines) + "\n")
+    prior = doc.read_text() if doc.is_file() else ""
+    doc.write_text(prior + block if prior else block.lstrip("\n"))
 
 
 def skill_names(skills: list) -> list[str]:
