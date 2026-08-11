@@ -1168,6 +1168,7 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
             "nudges": result.nudges,
             "rate_limit_retries": result.rate_limit_retries,
             "transient_retries": result.transient_retries,
+            "template_drift": getattr(result, "template_drift", {}) or {},
             "aborted_by_budget": result.aborted_by_budget,
         }
 

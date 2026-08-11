@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -134,6 +134,9 @@ class TrialResult:
     nudges: int = 0              # presence-gated continue-nudges issued
     rate_limit_retries: int = 0  # RATE_LIMITED backoff resumes used
     transient_retries: int = 0   # TRANSIENT_API_ERROR backoff resumes used
+    # sandbox-seed files the agent deleted or rewrote, path -> reason.
+    # Empty for a well-behaved trial; see Variant.verify_workspace.
+    template_drift: dict[str, str] = field(default_factory=dict)
 
 
 # Hard fallbacks for the orchestral loop knobs, used only when a harness's
@@ -944,6 +947,21 @@ class TrialRunner:
         traj_hook.write_to_log(footer)
         traj_hook.close()
 
+        # Did the agent rewrite the sandbox seed it was given? Checked while
+        # the sandbox still exists (cleanup runs below) and before the trial
+        # record is written, so the drift lands in trial.json alongside the
+        # score it explains. See Variant.verify_workspace for why this
+        # records rather than prevents.
+        template_drift = variant.verify_workspace(sandbox_dir)
+        if template_drift:
+            detail = ", ".join(f"{p} ({s})"
+                               for p, s in sorted(template_drift.items()))
+            print(f"warning: {trial_id}: agent modified its own sandbox seed: "
+                  f"{detail}. Grading reads the benchmark's field contract, "
+                  f"not the sandbox copy, so a trial that self-validated "
+                  f"against the rewritten file can still miss every graded "
+                  f"key.", flush=True)
+
         full_trial = {
             "trial_id": trial_id,
             "config": {
@@ -989,6 +1007,7 @@ class TrialRunner:
             "nudges": nudges,
             "rate_limit_retries": rate_limit_retries,
             "transient_retries": transient_retries,
+            "template_drift": template_drift,
             "aborted_by_budget": aborted,
             "error": error,
             "artifacts": {
@@ -1080,6 +1099,7 @@ class TrialRunner:
             nudges=nudges,
             rate_limit_retries=rate_limit_retries,
             transient_retries=transient_retries,
+            template_drift=template_drift,
         )
 
     def _extract_usage(self, agent, trajectory: Trajectory,

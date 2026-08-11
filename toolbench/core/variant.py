@@ -15,6 +15,7 @@ reporting layer uses these to attribute reach deltas to a single capability
 without anyone hardcoding which rungs to subtract.
 """
 
+import hashlib
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +39,10 @@ class Variant:
     user_prompt_file: Path | None = None
     system_prompt_file: Path | None = None
     template_dir: Path | None = None
+    # sha256 of each seeded file, captured by setup_workspace so the end of
+    # the trial can tell whether the agent rewrote its own contract.
+    _template_manifest: dict[str, str] = field(default_factory=dict,
+                                               repr=False)
 
     @classmethod
     def from_dict(cls, data: dict | None, *, name: str,
@@ -83,6 +88,7 @@ class Variant:
         """
         base = Path(base_directory)
         base.mkdir(parents=True, exist_ok=True)
+        self._template_manifest = self.template_manifest()
         if self.template_dir is None:
             return
         if not self.template_dir.exists():
@@ -100,6 +106,58 @@ class Variant:
                 shutil.copytree(item, target, dirs_exist_ok=True, ignore=ignore)
             else:
                 shutil.copy2(item, target)
+
+    def template_manifest(self) -> dict[str, str]:
+        """Map sandbox-relative path -> sha256 for every seeded file.
+
+        Taken at setup so the same files can be re-checked when the trial
+        ends; see `verify_workspace`.
+        """
+        if self.template_dir is None or not self.template_dir.exists():
+            return {}
+        out: dict[str, str] = {}
+        for src in sorted(self.template_dir.rglob("*")):
+            if not src.is_file() or src.name == ".DS_Store":
+                continue
+            rel = src.relative_to(self.template_dir).as_posix()
+            out[rel] = hashlib.sha256(src.read_bytes()).hexdigest()
+        return out
+
+    def verify_workspace(self, base_directory: str | Path) -> dict[str, str]:
+        """Report seeded files the agent deleted or rewrote.
+
+        The sandbox seed is a CONTRACT, not a suggestion: `bare` ships
+        exactly one file, results/answer_schema.json, and the whole rubric
+        is written against the field names in it. Nothing stops an agent
+        from clobbering it -- codex's apply_patch `*** Add File:` silently
+        overwrites an existing path (verified against codex-cli 0.146.0,
+        which still reports `kind: "add"` for the overwrite). An agent that
+        does so can then validate its answer against its OWN substitute and
+        get a clean pass locally while missing every graded key.
+
+        That is exactly what happened to gpt-5.6-sol / bare / tools_defined
+        / seed 1001 on 2026-08-10: it listed the sandbox with
+        `rg --files -g '!results/**'`, never saw the schema it had been
+        given, wrote its own over the top, self-validated against that, and
+        scored 0.0 on a trial whose physics was otherwise worth ~0.81. The
+        trial record said only MODEL_STOPPED_EARLY and the agent's own
+        write-up asserted the file "was absent", so the cause took a full
+        forensic pass to recover.
+
+        This does NOT prevent the overwrite -- protecting the file would
+        change the affordances of the sandbox mid-study and make new trials
+        non-comparable with old ones. It records it, so a zero of this kind
+        is legible immediately instead of looking like a physics failure.
+        """
+        base = Path(base_directory)
+        drift: dict[str, str] = {}
+        for rel, digest in (self._template_manifest or {}).items():
+            live = base / rel
+            if not live.is_file():
+                drift[rel] = "deleted"
+            elif hashlib.sha256(live.read_bytes()).hexdigest() != digest:
+                drift[rel] = "overwritten"
+        return drift
 
 
 def variants_dir(benchmark_dir: str | Path) -> Path:
