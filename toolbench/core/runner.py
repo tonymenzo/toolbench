@@ -13,10 +13,11 @@ usage from `agent.context`, grades the result with a benchmark-aware
 import datetime
 import os
 import shutil
+import subprocess
 import sys
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -133,6 +134,9 @@ class TrialResult:
     nudges: int = 0              # presence-gated continue-nudges issued
     rate_limit_retries: int = 0  # RATE_LIMITED backoff resumes used
     transient_retries: int = 0   # TRANSIENT_API_ERROR backoff resumes used
+    # sandbox-seed files the agent deleted or rewrote, path -> reason.
+    # Empty for a well-behaved trial; see Variant.verify_workspace.
+    template_drift: dict[str, str] = field(default_factory=dict)
 
 
 # Hard fallbacks for the orchestral loop knobs, used only when a harness's
@@ -140,6 +144,69 @@ class TrialResult:
 #   - ux_feedback (bool, default off): issue one post-completion, UNSCORED
 #     turn asking the agent to critique the tools it was given. A tool-
 #     development aid, not a benchmark condition; see `_UX_FEEDBACK_PROMPT`.
+def _git_object_stores(benchmark_dir) -> list[str]:
+    """`.git` of every repo containing a benchmark, as deny-read paths.
+
+    Deny-reading the benchmark DIRECTORY does not protect the answer key: git
+    keeps a second copy of every tracked file in `.git/objects`, and
+    `git show HEAD:<path>` reads it without ever touching the working tree.
+
+    Observed, not hypothesised. A 2026-08-10 haiku trial ran
+
+        cd <repo> && git show HEAD:benchmarks/llp_forward/soln/truth.json
+
+    together with `git ls-tree HEAD .../soln/` and `git log --all --follow`,
+    none of which the filesystem policy stopped. The integrity scanner caught
+    it after the fact on the `soln/` marker, but detection is not containment.
+
+    NOTE the residual gap this does NOT close: the Seatbelt policy confines
+    Bash and its children only, so a harness's own file-reading tool can still
+    reach outside the sandbox. The same trial read `analysis/notes/*.tex` that
+    way. Closing that needs harness-level path restriction, not a deny list.
+    """
+    out: list[str] = []
+    dirs = (benchmark_dir if isinstance(benchmark_dir, list)
+            else [benchmark_dir]) if benchmark_dir else []
+    for d in dirs:
+        p = Path(str(d)).resolve()
+        for cand in [p, *p.parents]:
+            g = cand / ".git"
+            if g.exists():
+                out.append(str(g))
+                break
+    return sorted(set(out))
+
+
+def _isolate_project_root(sandbox_dir) -> None:
+    """Make a trial sandbox its own project root for the Claude Code CLI.
+
+    Trial sandboxes normally live INSIDE the benchmark repo (`runs/<id>/...`),
+    and the CLI resolves project-scoped settings and skills from the enclosing
+    project root — so the repo's own `.claude/skills/` is inherited by every
+    trial. In hepbench that meant a guide describing the benchmark system, its
+    layout and where `ground_truth/` lives, reaching every arm of every run,
+    unrecorded in the manifest. `--setting-sources project` does not help: the
+    repo's skills ARE project scope from the sandbox's point of view.
+
+    A `.git` in the sandbox stops the walk-up (verified against the live CLI:
+    the enclosing repo's skill disappears while the sandbox's own remains).
+    A real `git init` is used rather than a bare marker directory so that any
+    `git` the agent happens to run behaves sanely instead of failing with
+    "not a git repository"; the marker is only a fallback when git is absent.
+
+    Idempotent, and never touches an existing repo.
+    """
+    sandbox = Path(sandbox_dir)
+    if (sandbox / ".git").exists():
+        return
+    try:
+        subprocess.run(["git", "init", "-q", str(sandbox)], check=True,
+                       capture_output=True, timeout=30)
+    except Exception:
+        # git missing or refused: the marker alone still blocks inheritance.
+        (sandbox / ".git").mkdir(parents=True, exist_ok=True)
+
+
 def _is_subscription(harness) -> bool:
     """Does this harness run under a subscription rather than metered API use?
 
@@ -414,11 +481,31 @@ class TrialRunner:
         prompt_base = variant.read_user_prompt()
         system_prompt = variant.read_system_prompt() or DEFAULT_SYSTEM_PROMPT
         # Loadout skills: tool-use guidance that travels with the loadout.
-        # on_demand skills land in <sandbox>/skills/ with a prompt pointer;
-        # inline skills are embedded. Strict: a declared-but-missing skill
-        # raises here rather than silently running a thinner arm.
+        # inline skills are embedded in the system prompt. on_demand skills go
+        # native where the runtime has a skill concept — claude_code drives the
+        # real CLI, which discovers <cwd>/.claude/skills/ under `project`
+        # setting scope, so writing there surfaces each skill's description to
+        # the model instead of a bare filename it cannot judge. Other runtimes
+        # fall back to <sandbox>/skills/ plus a prompt pointer.
+        #
+        # Either way delivery stays PER-ARM: the skill lands in this trial's
+        # sandbox only, so it reaches exactly the arm whose loadout declares
+        # it. (That is also why ~/.claude/skills must not be in scope — see the
+        # --setting-sources note in runtime.py.) Strict: a declared-but-missing
+        # skill raises here rather than silently running a thinner arm.
+        if harness.runtime_name == "claude_code":
+            _isolate_project_root(sandbox_dir)
+        native_skills_dir = (Path(sandbox_dir) / ".claude" / "skills"
+                             if harness.runtime_name == "claude_code" else None)
+        # The loadout's own framing, for THIS arm only. Applied before the
+        # skills pointer so the agent learns the toolset exists before it is
+        # told where the guides are.
+        if loadout.system_prompt_addendum:
+            system_prompt = (f"{system_prompt}\n\n"
+                             f"{loadout.system_prompt_addendum}")
         skills_addendum = prepare_skills(loadout.skills, sandbox_dir,
-                                         loadout_name=loadout.name)
+                                         loadout_name=loadout.name,
+                                         native_dir=native_skills_dir)
         if skills_addendum:
             system_prompt = f"{system_prompt}\n\n{skills_addendum}"
 
@@ -503,6 +590,7 @@ class TrialRunner:
                         ((benchmark_dir if isinstance(benchmark_dir, list)
                           else [benchmark_dir]) if benchmark_dir else [])
                         + _toolbase_protected_paths()
+                        + _git_object_stores(benchmark_dir)
                     ),
                 )
                 # One resume loop over the SAME agent / sandbox / context.
@@ -859,6 +947,21 @@ class TrialRunner:
         traj_hook.write_to_log(footer)
         traj_hook.close()
 
+        # Did the agent rewrite the sandbox seed it was given? Checked while
+        # the sandbox still exists (cleanup runs below) and before the trial
+        # record is written, so the drift lands in trial.json alongside the
+        # score it explains. See Variant.verify_workspace for why this
+        # records rather than prevents.
+        template_drift = variant.verify_workspace(sandbox_dir)
+        if template_drift:
+            detail = ", ".join(f"{p} ({s})"
+                               for p, s in sorted(template_drift.items()))
+            print(f"warning: {trial_id}: agent modified its own sandbox seed: "
+                  f"{detail}. Grading reads the benchmark's field contract, "
+                  f"not the sandbox copy, so a trial that self-validated "
+                  f"against the rewritten file can still miss every graded "
+                  f"key.", flush=True)
+
         full_trial = {
             "trial_id": trial_id,
             "config": {
@@ -870,6 +973,10 @@ class TrialRunner:
                 },
                 "loadout": loadout.name,
                 "skills": skill_names(loadout.skills),
+                # Recorded verbatim: it is part of the measured treatment, and
+                # a reader comparing two campaigns must be able to see whether
+                # an arm was framed to reach for its tools.
+                "system_prompt_addendum": loadout.system_prompt_addendum,
                 "variant": {
                     "name": variant.name,
                     "description": variant.description,
@@ -900,6 +1007,7 @@ class TrialRunner:
             "nudges": nudges,
             "rate_limit_retries": rate_limit_retries,
             "transient_retries": transient_retries,
+            "template_drift": template_drift,
             "aborted_by_budget": aborted,
             "error": error,
             "artifacts": {
@@ -991,6 +1099,7 @@ class TrialRunner:
             nudges=nudges,
             rate_limit_retries=rate_limit_retries,
             transient_retries=transient_retries,
+            template_drift=template_drift,
         )
 
     def _extract_usage(self, agent, trajectory: Trajectory,

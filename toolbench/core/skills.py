@@ -60,21 +60,95 @@ def _parse_entry(entry: dict, *, loadout_name: str) -> tuple[str, Path, str]:
     return str(name), Path(str(file)), mode
 
 
+def _frontmatter_description(src: Path) -> str:
+    """The skill's `description:` from its YAML frontmatter, if it has one.
+
+    Runtimes with a native skill concept surface this themselves. Runtimes
+    without one (codex) get only the prompt pointer, and a pointer that reads
+    "- skills/pythia_forward_run_cards.md: pythia_forward_run_cards" tells the
+    agent nothing about whether the file is worth opening -- it is the slug
+    twice. Carrying the description across makes the decision informed rather
+    than a coin flip, which is the difference between measuring whether
+    guidance helps and measuring whether an agent gambles on unlabelled files.
+
+    Parsed without a YAML dependency: the block is a leading `---` fence and
+    the field is a single line. Anything unexpected yields "" rather than
+    raising -- a pointer is a convenience, never a reason to fail a trial.
+    """
+    try:
+        text = src.read_text()
+    except Exception:
+        return ""
+    if not text.lstrip().startswith("---"):
+        return ""
+    body = text.lstrip()[3:]
+    end = body.find("\n---")
+    if end == -1:
+        return ""
+    for line in body[:end].splitlines():
+        if line.strip().lower().startswith("description:"):
+            desc = line.split(":", 1)[1].strip().strip('"\'')
+            return " ".join(desc.split())
+    return ""
+
+
+def _write_native_skill(root: Path, name: str, src: Path,
+                        loadout_name: str) -> None:
+    """Materialize one skill as a PROJECT-scoped Claude Code skill.
+
+    Writes `<root>/<name>/SKILL.md`, which the CLI discovers under `project`
+    setting scope because the sandbox is the trial's cwd. The model then sees
+    the skill's `description` without opening anything — the whole reason to
+    prefer this over a filename pointer.
+
+    The directory name is what the CLI lists the skill as; a `name:` in the
+    frontmatter does not override it. Frontmatter is otherwise passed through
+    untouched (extra keys such as a toolkit's `bundle:` are harmless), and
+    synthesized when the source has none, since the CLI requires it.
+    """
+    dst_dir = root / name
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    text = src.read_text()
+    if not text.lstrip().startswith("---"):
+        where = f" (from the {loadout_name} loadout)" if loadout_name else ""
+        text = (f"---\nname: {name}\n"
+                f"description: Guidance bundled with this toolset{where}.\n"
+                f"---\n\n{text}")
+    (dst_dir / "SKILL.md").write_text(text)
+
+
 def prepare_skills(skills: list, sandbox_dir: str | Path, *,
-                   loadout_name: str = "") -> str:
+                   loadout_name: str = "", native_dir: str | Path | None = None) -> str:
     """Materialize a loadout's skills for one trial.
 
-    Copies `on_demand` skills into `<sandbox>/skills/<name><ext>` and
-    returns the system-prompt addendum covering both modes ('' when the
-    loadout has no skills). Raises on a missing file or malformed entry
-    — a skill the loadout declares but the agent never receives would
-    corrupt the measurement silently.
+    Returns the system-prompt addendum ('' when there is nothing to add).
+    Raises on a missing file or malformed entry — a skill the loadout declares
+    but the agent never receives would corrupt the measurement silently.
+
+    `inline` skills are always embedded in the system prompt. `on_demand`
+    skills are delivered one of two ways:
+
+    - `native_dir` set (the runner passes `<sandbox>/.claude/skills` for
+      runtimes that drive the Claude Code CLI): written as real project-scoped
+      skills, so the CLI surfaces each one's name AND description to the model
+      and the agent can invoke it. No prompt addendum is needed or emitted —
+      the harness's own skill machinery does the advertising.
+    - otherwise: copied to `<sandbox>/skills/<name><ext>` with a one-line
+      pointer appended to the system prompt. This is the portable fallback for
+      runtimes with no skill concept; it relies on the agent choosing to read
+      a file it can only identify by name, so prefer the native path where the
+      runtime supports it.
+
+    Both paths keep skills PER-TRIAL and PER-ARM, which is the property that
+    matters: a skill must reach exactly the arm whose loadout declares it.
     """
     if not skills:
         return ""
     sandbox = Path(sandbox_dir)
+    native_root = Path(native_dir) if native_dir is not None else None
     pointers: list[str] = []
     inline_blocks: list[str] = []
+    agents_blocks: list[tuple[str, str, str, str]] = []
 
     for entry in skills:
         name, src, mode = _parse_entry(entry, loadout_name=loadout_name)
@@ -87,11 +161,20 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
             inline_blocks.append(
                 f"### Skill: {name}\n{src.read_text().strip()}"
             )
-        else:  # on_demand
+        elif native_root is not None:
+            _write_native_skill(native_root, name, src, loadout_name)
+        else:  # on_demand, portable fallback
             dst = sandbox / SKILLS_SUBDIR / f"{name}{src.suffix or '.md'}"
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
-            pointers.append(f"- {dst.relative_to(sandbox)}: {name}")
+            desc = _frontmatter_description(src)
+            pointers.append(f"- {dst.relative_to(sandbox)}: {name}"
+                            + (f" — {desc}" if desc else ""))
+            agents_blocks.append((name, desc, str(dst.relative_to(sandbox)),
+                                  _strip_frontmatter(src.read_text())))
+
+    if agents_blocks:
+        _write_agents_doc(sandbox, agents_blocks)
 
     parts: list[str] = []
     if pointers:
@@ -102,6 +185,57 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
     if inline_blocks:
         parts.append("\n\n".join(inline_blocks))
     return "\n\n".join(parts)
+
+
+def _strip_frontmatter(text: str) -> str:
+    """The document body, without its YAML frontmatter block."""
+    if not text.lstrip().startswith("---"):
+        return text.strip()
+    body = text.lstrip()[3:]
+    end = body.find("\n---")
+    return (body[end + 4:] if end != -1 else body).strip()
+
+
+def _write_agents_doc(sandbox: Path, blocks) -> None:
+    """Deliver the guides IN FULL via `<sandbox>/AGENTS.md`.
+
+    AGENTS.md is codex's only MODEL-FACING instruction channel: it is
+    auto-injected into every session (verified against codex-cli 0.146.0),
+    whereas `~/.codex/prompts/` entries are user-typed `/slash` commands and
+    so are unreachable in a headless `codex exec` benchmark run.
+
+    THE BODY, not a pointer. A pointer would leave "did the agent choose to
+    open the file" inside the measurement, and on the 2026-08-10 gpt-5.6 run
+    that nuisance variable dominated: the guide was never opened at all. What
+    the ablation is meant to isolate is whether the bundle's KNOWLEDGE helps,
+    and the no-tools arm receives nothing either way, so injecting the body
+    makes the within-model delta measure exactly that.
+
+    It does mean a runtime WITHOUT a native skill mechanism receives the
+    guidance unconditionally, while one WITH it (claude_code) still loads the
+    body on invocation. That asymmetry is real and is a property of the
+    harnesses, not of this code: each delivers the bundle through the
+    strongest channel it has. It must be stated when deltas from two runtimes
+    are compared -- and `mode: inline` on both is the way to make them
+    symmetric if that comparison is load-bearing.
+
+    Appends to an existing AGENTS.md rather than clobbering it: a benchmark's
+    sandbox template may legitimately ship one, and silently replacing it
+    would remove task material.
+    """
+    doc = sandbox / "AGENTS.md"
+    parts = ["## Reference guides for this workspace\n",
+             "The following material is provided with your toolset. It is "
+             "reference documentation, not instructions to follow blindly; "
+             "apply the parts that bear on the task.\n"]
+    for name, desc, rel, body in blocks:
+        parts.append(f"\n### {name}\n")
+        if desc:
+            parts.append(f"_{desc}_\n")
+        parts.append(f"\n(Also on disk at `{rel}`.)\n\n{body}\n")
+    block = "\n".join(parts)
+    prior = doc.read_text() if doc.is_file() else ""
+    doc.write_text((prior.rstrip() + "\n\n" + block) if prior else block)
 
 
 def skill_names(skills: list) -> list[str]:

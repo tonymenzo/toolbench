@@ -517,6 +517,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "run_id": run_id,
         "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "git_sha": _git_sha(),
+        "benchmark_git_sha": _git_sha(bench_dir),
+        "environment": _environment_record(),
         "benchmark": bench_name,
         "benchmark_dir": str(bench_dir),
         # `extends:` provenance: the parent dir and the post-merge config
@@ -1002,19 +1004,6 @@ def cmd_regrade(args: argparse.Namespace) -> int:
     return 0
 
 
-def _row_reach(stages: dict, stage_order: list[str],
-               weights: list[float]) -> float:
-    """Per-session reach R_j computed from a stages dict (with
-    cumulative-product absorbing convention)."""
-    total = sum(weights) or 1.0
-    cum = 1.0
-    out = 0.0
-    for sid, w in zip(stage_order, weights):
-        passed = 1 if stages.get(sid) else 0
-        cum *= passed
-        out += cum * w
-    return out / total
-
 
 def _partition_resume_rows(existing: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split prior trials.jsonl rows into `(kept, retryable)` for a resume.
@@ -1179,6 +1168,7 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
             "nudges": result.nudges,
             "rate_limit_retries": result.rate_limit_retries,
             "transient_retries": result.transient_retries,
+            "template_drift": getattr(result, "template_drift", {}) or {},
             "aborted_by_budget": result.aborted_by_budget,
         }
 
@@ -1581,16 +1571,13 @@ def _paired_deltas(trials: list[dict],
     ordered by first appearance in `trials` (i.e. the CLI's order).
     Duplicate (condition, seed) rows are averaged before pairing.
     """
-    if stage_order is None:
-        for t in trials:
-            s = t.get("stages") or {}
-            if s:
-                stage_order = list(s.keys())
-                break
-    if not stage_order:
-        return []
-    weights = ([stage_weights.get(sid, 0.0) for sid in stage_order]
-               if stage_weights is not None else [1.0] * len(stage_order))
+    # `stage_order` / `stage_weights` are vestigial: reach is the trial's
+    # graded score now, so no stage bookkeeping happens here. They are still
+    # ACCEPTED so existing callers keep working, and ignored. Crucially they
+    # must not GATE the computation -- the previous version returned [] when
+    # no stage dict was present, which would silently suppress the headline
+    # ablation number for any rubric that does not expose one.
+    del stage_order, stage_weights
 
     # model -> condition -> seed -> list[(reach, passed)]
     by_model: dict[str, dict[str, dict[object, list[tuple[float, int]]]]] = {}
@@ -1602,7 +1589,17 @@ def _paired_deltas(trials: list[dict],
         cond = t["condition"]
         if cond not in cond_order:
             cond_order.append(cond)
-        reach = _row_reach(t.get("stages") or {}, stage_order, weights)
+        # The trial's CONTINUOUS graded score -- the same quantity the cell
+        # table reports as `mean_score`. It must not be the binary
+        # stage-absorbing reach: with a cumulative-product convention, one
+        # shared early failure zeroes every later stage for BOTH arms, so the
+        # per-seed difference is identically 0 and the delta reports "no
+        # effect" no matter how far apart the arms actually are. On the
+        # 2026-08-10 campaign that produced Dreach +0.00 CI [0.00, 0.00]
+        # between cells whose mean scores were 0.7978 and 0.9686, because both
+        # failed `yield_distance` (stage 5 of 9) and everything downstream was
+        # absorbed to zero in both.
+        reach = float(t.get("score") or 0.0)
         by_model.setdefault(t["model"], {}).setdefault(cond, {}) \
                 .setdefault(seed, []).append((reach, _trial_passed(t, pass_threshold)))
 
@@ -1924,13 +1921,70 @@ def _count_failures(rows: list[dict]) -> dict[str, int]:
     return out
 
 
-def _git_sha() -> str:
+def _git_sha(cwd=None) -> str:
+    """HEAD of the framework checkout, or of `cwd` when given.
+
+    The framework SHA alone is not the run's provenance: the BENCHMARK lives in
+    a different repo (its prompts, rubric and ground truth are what the scores
+    are computed against), so the manifest records both. Degrades to "unknown"
+    for a wheel install or a non-repo directory rather than failing the run.
+    """
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT
+            ["git", "rev-parse", "HEAD"], cwd=str(cwd or REPO_ROOT),
+            stderr=subprocess.DEVNULL,
         ).decode().strip()
     except Exception:
         return "unknown"
+
+
+#: Probed for the manifest's `environment` block. Deliberately a fixed list
+#: rather than "everything installed": a full pip freeze is unreadable and
+#: changes for reasons that have nothing to do with the science, while these
+#: are the packages a numerical result can actually turn on.
+_ENV_PACKAGES = (
+    "numpy", "scipy", "matplotlib", "pandas", "sympy",
+    "pythia8", "pythia8mc", "ROOT", "uproot", "awkward", "pyhepmc",
+)
+
+
+def _environment_record() -> dict:
+    """The ambient stack a trial can reach, for the run record.
+
+    WHY THIS EXISTS. A tools arm reaches into a pinned, versioned toolkit venv
+    whose version the manifest already records. A NO-TOOLS arm reaches into
+    whatever the machine happens to have -- and that is just as much part of
+    the measured configuration, because the control arm's capability rests on
+    it entirely. Leaving it unrecorded makes the control uncontrolled: a
+    2026-08 campaign ran its two arms against DIFFERENT Pythia versions, and a
+    third built the reference, with nothing in the run record to show it.
+
+    This does not make an ambient environment hermetic; it makes it auditable,
+    which is the part a reader needs to reproduce or discount a result.
+
+    LIMITATION: versions come from installed-distribution metadata, so a conda
+    package that ships none (ROOT is the usual case) is absent even when it is
+    importable. `conda_prefix` is recorded so that environment can still be
+    reconstructed. Absence here means "not pip-visible", NOT "not installed".
+    """
+    import platform
+    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+    packages = {}
+    for name in _ENV_PACKAGES:
+        try:
+            packages[name] = _pkg_version(name)
+        except PackageNotFoundError:
+            continue
+        except Exception:
+            packages[name] = "unknown"
+    return {
+        "python": platform.python_version(),
+        "python_executable": sys.executable,
+        "platform": platform.platform(),
+        "packages": packages,
+        "conda_prefix": os.environ.get("CONDA_PREFIX", ""),
+    }
 
 
 def _file_sha(path: Path) -> str:

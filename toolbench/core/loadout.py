@@ -60,6 +60,14 @@ class Loadout:
     name: str
     sources: list[Source] = field(default_factory=list)
     skills: list[dict] = field(default_factory=list)
+    #: Prose appended to the system prompt for THIS arm only -- the third leg
+    #: of a domain harness, alongside tools and skills: the framing that tells
+    #: an agent the toolset exists and is the intended path. Shipping that
+    #: framing is what a real domain harness does, so omitting it measured a
+    #: bundle nobody would actually deploy. It lives on the LOADOUT rather
+    #: than the variant because it must never reach a no-tools arm, where it
+    #: would describe tools that are not there.
+    system_prompt_addendum: str = ""
 
     @classmethod
     def from_dict(cls, data: dict | None, *, name: str = "") -> "Loadout":
@@ -67,7 +75,9 @@ class Loadout:
         name = data.get("name", name)
         raw_sources = ((data.get("tools") or {}).get("sources")) or []
         sources = [Source.from_entry(e, loadout=name) for e in raw_sources]
-        return cls(name=name, sources=sources, skills=data.get("skills") or [])
+        return cls(name=name, sources=sources, skills=data.get("skills") or [],
+                   system_prompt_addendum=str(
+                       data.get("system_prompt_addendum") or "").strip())
 
 
 def loadouts_dir(benchmark_dir: str | Path) -> Path:
