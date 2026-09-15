@@ -41,6 +41,7 @@ from pathlib import Path
 
 from .harness import Harness
 from .loadout import Loadout, Source
+from .skills import resolve_skills
 from .tool_policy import _build_core_tool
 
 
@@ -645,5 +646,24 @@ def build_agent_tools(harness: Harness, loadout: Loadout,
         report["sources"].append(entry)
         for t in stools:
             _register(t, label)
+
+    # Skills resolve HERE, with the tools, because this function is what the
+    # CLI's resolution preview calls -- so a skill that would not reach the
+    # agent fails before any trial starts, and the arm the manifest records
+    # under `resolution` describes both halves of the loadout rather than only
+    # its tools. Resolving in the runner instead put skills outside both.
+    #
+    # The toolbase loadout comes from the arm's own toolbase source, so a
+    # `toolbase:` skill is located in the SAME curation the tools came from
+    # rather than whatever happens to be the active default.
+    tb_loadout = None
+    for src in loadout.sources:
+        if src.backend == "toolbase" and isinstance(src.config, dict):
+            tb_loadout = src.config.get("loadout") or tb_loadout
+    report["skills"] = [
+        sk.record() for sk in resolve_skills(
+            loadout.skills, loadout_name=loadout.name,
+            toolbase_loadout=tb_loadout)
+    ]
 
     return tools, report

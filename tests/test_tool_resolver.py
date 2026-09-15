@@ -6,6 +6,7 @@ the geometry benchmark's `tools/` dir, referenced by path. Skipped otherwise.
 
 import tempfile
 import unittest
+from pathlib import Path
 
 from tests.helpers import GEOMETRY_DIR
 
@@ -81,3 +82,49 @@ class TestResolver(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_DEPS, "orchestral not importable")
+class TestSkillsResolveWithTools(unittest.TestCase):
+    """Skills resolve where tools do, so they reach the preview.
+
+    `build_agent_tools` is called twice: once by the CLI against a temp dir,
+    which is what fills `manifest["resolution"]` and fails a mis-wired arm
+    before any trial runs, and once per trial against its sandbox. A skill
+    resolved anywhere else is absent from the first, so the manifest would
+    describe only half the arm and a bad reference would surface twenty
+    minutes into a run.
+    """
+
+    def setUp(self):
+        from toolbench.core import tool_resolver
+        self.tr = tool_resolver
+        self.h = Harness.from_dict(
+            {"runtime": {"name": "orchestral"},
+             "provider": {"name": "anthropic"},
+             "core": {"tools": ["RunPythonTool"]}}, id="orchestral/anthropic")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.skill = Path(self._tmp.name) / "recipe.md"
+        self.skill.write_text("---\nname: recipe\ndescription: d\n---\nbody\n")
+
+    def _report(self, skills):
+        lo = Loadout.from_dict(
+            {"tools": {"sources": []}, "skills": skills}, name="arm")
+        with tempfile.TemporaryDirectory() as sb:
+            _tools, report = self.tr.build_agent_tools(self.h, lo, sb)
+        return report
+
+    def test_report_carries_resolved_skills(self):
+        report = self._report([{"name": "recipe", "file": str(self.skill)}])
+        self.assertEqual([r["name"] for r in report["skills"]], ["recipe"])
+        self.assertEqual(report["skills"][0]["source"], "benchmark")
+
+    def test_no_skills_is_an_empty_list_not_a_missing_key(self):
+        """A consumer reading the manifest should not have to guess."""
+        self.assertEqual(self._report([])["skills"], [])
+
+    def test_a_bad_reference_fails_at_resolution(self):
+        """Which is the preview, not twenty minutes into the run."""
+        with self.assertRaises(FileNotFoundError):
+            self._report([{"name": "gone", "file": "/nope/missing.md"}])

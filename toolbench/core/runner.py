@@ -503,18 +503,16 @@ class TrialRunner:
         if loadout.system_prompt_addendum:
             system_prompt = (f"{system_prompt}\n\n"
                              f"{loadout.system_prompt_addendum}")
-        # The toolbase loadout this arm serves from, so a `toolbase:` skill
-        # resolves against the SAME curation the tools came from rather than
-        # whatever happens to be the active default.
-        _tb_loadout = None
-        for _src in loadout.sources:
-            if _src.backend == "toolbase" and isinstance(_src.config, dict):
-                _tb_loadout = _src.config.get("loadout") or _tb_loadout
-        skills_addendum, skill_records = prepare_skills(
+        # Materialize from what build_agent_tools already resolved, above.
+        # Resolving again here would ask toolbase the same question a second
+        # time per trial, and two answers that could in principle differ is
+        # exactly the drift this arrangement exists to avoid.
+        skill_records = tool_report.get("skills") or []
+        skills_addendum, _ = prepare_skills(
             loadout.skills, sandbox_dir,
             loadout_name=loadout.name,
             native_dir=native_skills_dir,
-            toolbase_loadout=_tb_loadout)
+            records=skill_records)
         if skills_addendum:
             system_prompt = f"{system_prompt}\n\n{skills_addendum}"
 

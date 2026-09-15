@@ -78,7 +78,7 @@ class ResolvedSkill:
             "name": self.name, "source": self.source, "mode": self.mode,
             "toolkit": self.toolkit, "slug": self.slug,
             "version": self.version, "path": str(self.root),
-            "is_dir": self.is_dir,
+            "doc": str(self.doc), "is_dir": self.is_dir,
         }
 
 
@@ -333,9 +333,60 @@ def _write_native_skill(root: Path, name: str, src: Path,
     (dst_dir / "SKILL.md").write_text(text)
 
 
+def resolve_skills(skills: list, *, loadout_name: str = "",
+                   toolbase_loadout: str | None = None) -> "list[ResolvedSkill]":
+    """Locate a loadout's skills without writing anything.
+
+    Split from materialization so it can run where the TOOLS resolve, in
+    ``build_agent_tools``. That call happens twice for a reason worth
+    preserving: once in the CLI's resolution preview, against a temp
+    directory, which is what puts the arm in ``manifest["resolution"]`` and
+    fails a mis-wired arm before any trial burns time; and once per trial,
+    against the trial's own sandbox. Skills resolving anywhere else would be
+    absent from the first and so from the manifest, and a typo in a skill
+    name would surface twenty minutes into a run instead of at the preview.
+
+    Args:
+        skills: Raw ``skills:`` entries from the loadout.
+        loadout_name: For error messages.
+        toolbase_loadout: The toolbase loadout the arm serves from.
+
+    Returns:
+        One ResolvedSkill per entry, in declaration order.
+
+    Raises:
+        ValueError / FileNotFoundError: any entry that would not reach the
+            agent, which is a thinner arm than the measurement claims.
+    """
+    if not skills:
+        return []
+    specs = [_parse_entry(e, loadout_name=loadout_name) for e in skills]
+    # One query for the whole arm, and only when something needs it -- a
+    # benchmark-local skill must not make a trial depend on toolbase.
+    rows = (_toolbase_skill_rows(toolbase_loadout)
+            if any(sp["kind"] == "toolbase" for sp in specs) else {})
+    return [_resolve_spec(sp, loadout_name=loadout_name, toolbase_rows=rows)
+            for sp in specs]
+
+
+def _from_record(rec: dict) -> "ResolvedSkill":
+    """Rebuild a ResolvedSkill from the record resolution already produced.
+
+    Lets a trial materialize from the answer the resolver reached rather than
+    asking again -- one query per resolution, not one per consumer of it.
+    """
+    return ResolvedSkill(
+        name=rec["name"], doc=Path(rec["doc"]), root=Path(rec["path"]),
+        is_dir=bool(rec.get("is_dir")), mode=rec.get("mode", "on_demand"),
+        source=rec.get("source", "benchmark"), toolkit=rec.get("toolkit"),
+        slug=rec.get("slug"), version=rec.get("version"),
+    )
+
+
 def prepare_skills(skills: list, sandbox_dir: str | Path, *,
                    loadout_name: str = "", native_dir: str | Path | None = None,
-                   toolbase_loadout: str | None = None) -> tuple:
+                   toolbase_loadout: str | None = None,
+                   records: "list[dict] | None" = None) -> tuple:
     """Materialize a loadout's skills for one trial.
 
     Returns ``(system_prompt_addendum, records)`` -- the addendum is '' when
@@ -369,13 +420,11 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
     inline_blocks: list[str] = []
     agents_blocks: list[tuple[str, str, str, str]] = []
 
-    specs = [_parse_entry(e, loadout_name=loadout_name) for e in skills]
-    # One query for the whole arm, and only when something needs it -- a
-    # benchmark-local skill must not make a trial depend on toolbase.
-    rows = (_toolbase_skill_rows(toolbase_loadout)
-            if any(sp["kind"] == "toolbase" for sp in specs) else {})
-    resolved = [_resolve_spec(sp, loadout_name=loadout_name,
-                              toolbase_rows=rows) for sp in specs]
+    resolved = (
+        [_from_record(r) for r in records] if records is not None
+        else resolve_skills(skills, loadout_name=loadout_name,
+                            toolbase_loadout=toolbase_loadout)
+    )
 
     for skill in resolved:
         name, src, mode = skill.name, skill.doc, skill.mode
