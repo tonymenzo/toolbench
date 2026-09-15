@@ -27,8 +27,13 @@ strict: a missing file or unknown mode raises at trial setup rather
 than silently running a thinner arm than the loadout declares.
 """
 
+import json
+import os
 import shutil
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 VALID_MODES = ("on_demand", "inline")
@@ -37,27 +42,221 @@ VALID_MODES = ("on_demand", "inline")
 SKILLS_SUBDIR = "skills"
 
 
-def _parse_entry(entry: dict, *, loadout_name: str) -> tuple[str, Path, str]:
-    """Validate one `skills:` entry into (name, file path, mode)."""
+@dataclass
+class ResolvedSkill:
+    """One skill, located and ready to materialize.
+
+    ``root`` is the unit to COPY and ``is_dir`` says how: a directory-form
+    skill keeps its ``references/`` and ``scripts/`` beside its ``SKILL.md``
+    and they have to come along, while a file-form skill IS its markdown.
+    Taking only ``doc`` for the first kind delivers an index of dangling
+    links -- which for a guide whose substance lives in ``references/`` is
+    most of the guide.
+    """
+
+    name: str
+    doc: Path
+    root: Path
+    is_dir: bool
+    mode: str
+    #: Where it came from, for the trial record: "benchmark" or
+    #: "toolbase:<toolkit>@<slot>".
+    source: str
+    toolkit: Optional[str] = None
+    slug: Optional[str] = None
+    version: Optional[str] = None
+
+    def record(self) -> dict:
+        """Provenance for the trial record.
+
+        Names what was RESOLVED, not what was declared. A run that recorded
+        only "feynrules" could not say which toolkit slot it came from, and
+        the slots differ: the same skill in two installed versions of one
+        toolkit had 11 pitfall entries in one and 6 in the other.
+        """
+        return {
+            "name": self.name, "source": self.source, "mode": self.mode,
+            "toolkit": self.toolkit, "slug": self.slug,
+            "version": self.version, "path": str(self.root),
+            "is_dir": self.is_dir,
+        }
+
+
+def _parse_entry(entry: dict, *, loadout_name: str) -> dict:
+    """Validate one `skills:` entry into a spec dict.
+
+    Two forms:
+
+    - ``{name, file, mode?}``    a skill that ships with the benchmark.
+    - ``{toolbase: "<toolkit>__<slug>", mode?}``  one served by toolbase with
+      the toolkit, located at trial setup against the SERVING slot.
+
+    The second form exists because the first cannot name a skill that lives
+    in someone else's checkout at a version toolbase chooses. Writing a path
+    to it by hand pins the wrong thing: the path is stable, the slot the
+    loadout actually serves is not.
+    """
     if not isinstance(entry, dict):
         raise ValueError(
             f"loadout {loadout_name!r}: each `skills:` entry must be a "
-            f"mapping with `name`/`file`, got {entry!r}"
-        )
-    name = entry.get("name")
-    file = entry.get("file")
-    if not name or not file:
-        raise ValueError(
-            f"loadout {loadout_name!r}: a skill needs both `name:` and "
-            f"`file:`; got {entry!r}"
+            f"mapping with `name`/`file` or `toolbase`, got {entry!r}"
         )
     mode = entry.get("mode", "on_demand")
     if mode not in VALID_MODES:
         raise ValueError(
-            f"loadout {loadout_name!r}: skill {name!r} has unknown mode "
+            f"loadout {loadout_name!r}: skill has unknown mode "
             f"{mode!r}; expected one of {list(VALID_MODES)}"
         )
-    return str(name), Path(str(file)), mode
+
+    ref = entry.get("toolbase")
+    if ref:
+        if entry.get("file"):
+            raise ValueError(
+                f"loadout {loadout_name!r}: skill {ref!r} sets both "
+                f"`toolbase:` and `file:`; use one -- `toolbase:` locates the "
+                f"skill itself and a `file:` beside it would silently win or "
+                f"disagree"
+            )
+        ref = str(ref)
+        if "__" not in ref:
+            raise ValueError(
+                f"loadout {loadout_name!r}: `toolbase:` skill must be "
+                f"'<toolkit>__<slug>' (the name `tb activate` uses); "
+                f"got {ref!r}"
+            )
+        toolkit, slug = ref.split("__", 1)
+        return {"kind": "toolbase", "toolkit": toolkit, "slug": slug,
+                "name": entry.get("name") or slug, "mode": mode}
+
+    name, file = entry.get("name"), entry.get("file")
+    if not name or not file:
+        raise ValueError(
+            f"loadout {loadout_name!r}: a skill needs both `name:` and "
+            f"`file:` (or a `toolbase:` reference); got {entry!r}"
+        )
+    return {"kind": "file", "name": str(name), "file": Path(str(file)),
+            "mode": mode}
+
+
+def _toolbase_skill_rows(toolbase_loadout: Optional[str]) -> dict:
+    """``{(toolkit, slug): row}`` from ``tb list --json``.
+
+    Shells out rather than importing toolbase's internals. The decision is not
+    just "which skills exist": it folds in two-layer config resolution, bundle
+    availability, the install scope of the slot, the loadout's allow/blocklists
+    and slug normalisation. Re-deriving that here is precisely the drift the
+    single-decision refactor in toolbase removed, and most of the machinery is
+    private. `tb list --json` is the public interface that already composes it.
+    One subprocess per trial against a trial measured in tens of minutes.
+
+    ONLY THE SERVING SLOT. `tb list --json` emits one entry per installed
+    slot, so a toolkit with five versions installed yields five rows for the
+    same skill, pointing at five different copies. Filtering by name alone
+    picks an arbitrary one -- in practice the highest version rather than the
+    pinned one, which is how a loadout pinned to `editable` can be handed the
+    skill from an older release. ``serving`` is the flag that means "the slot
+    toolbase would spawn"; ``active`` means the loadout names the toolkit.
+    Both are required.
+
+    Args:
+        toolbase_loadout: The toolbase loadout name to resolve against
+            (from the arm's ``tools.sources``), or None for the active one.
+
+    Returns:
+        Rows keyed by (toolkit, slug), each carrying the slot's version.
+
+    Raises:
+        RuntimeError: toolbase is not installed, or the query failed.
+    """
+    cmd = ["tb", "list", "--json"]
+    if toolbase_loadout:
+        cmd += ["--loadout", str(toolbase_loadout)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(
+            f"could not run `{' '.join(cmd)}` to locate toolbase skills: {e}"
+        ) from e
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` failed ({proc.returncode}): "
+            f"{(proc.stderr or proc.stdout or '').strip()[:400]}"
+        )
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` did not return JSON: {e}") from e
+
+    rows: dict = {}
+    for entry in payload:
+        if not (entry.get("serving") and entry.get("active")):
+            continue
+        tk = entry.get("name")
+        for sk in (entry.get("skills") or []):
+            row = dict(sk)
+            row["version"] = entry.get("version")
+            rows[(tk, sk.get("slug"))] = row
+    return rows
+
+
+def _resolve_spec(spec: dict, *, loadout_name: str,
+                  toolbase_rows: Optional[dict] = None) -> ResolvedSkill:
+    """Locate one parsed spec on disk.
+
+    Strict on purpose, matching how a missing `file:` is treated: a skill the
+    loadout declares but the agent never receives is a thinner arm than the
+    measurement claims, and it fails silently in the results rather than
+    loudly at setup.
+    """
+    if spec["kind"] == "file":
+        src = spec["file"]
+        if not src.is_file():
+            raise FileNotFoundError(
+                f"loadout {loadout_name!r}: skill {spec['name']!r} file not "
+                f"found: {src}"
+            )
+        return ResolvedSkill(
+            name=spec["name"], doc=src, root=src, is_dir=False,
+            mode=spec["mode"], source="benchmark",
+        )
+
+    tk, slug = spec["toolkit"], spec["slug"]
+    rows = toolbase_rows if toolbase_rows is not None else {}
+    row = rows.get((tk, slug))
+    if row is None:
+        known = sorted(f"{a}__{b}" for a, b in rows)
+        raise ValueError(
+            f"loadout {loadout_name!r}: skill {tk}__{slug} is not served by "
+            f"the toolkit toolbase would spawn. Served skills: "
+            f"{known or '(none)'}. A toolkit that is installed but not named "
+            f"by the loadout surfaces nothing, whatever its skills say."
+        )
+    state = row.get("state")
+    if state != "on":
+        raise ValueError(
+            f"loadout {loadout_name!r}: skill {tk}__{slug} resolves to "
+            f"{state!r}, not 'on', so it would not reach the agent. "
+            + {
+                "not-enabled": "The toolbase loadout declares skills.enabled "
+                               "and this is not in it.",
+                "off": "It was deactivated (`tb activate "
+                       f"{tk}__{slug}` to undo).",
+                "gated": "Its bundle's config requirements are unmet.",
+            }.get(str(state), "")
+        )
+    doc, root = row.get("doc"), row.get("root")
+    if not doc or not root:
+        raise ValueError(
+            f"loadout {loadout_name!r}: toolbase reported no path for "
+            f"{tk}__{slug}"
+        )
+    return ResolvedSkill(
+        name=spec["name"], doc=Path(doc), root=Path(root),
+        is_dir=bool(row.get("is_dir")), mode=spec["mode"],
+        source=f"toolbase:{tk}@{row.get('version')}",
+        toolkit=tk, slug=slug, version=row.get("version"),
+    )
 
 
 def _frontmatter_description(src: Path) -> str:
@@ -93,7 +292,8 @@ def _frontmatter_description(src: Path) -> str:
 
 
 def _write_native_skill(root: Path, name: str, src: Path,
-                        loadout_name: str) -> None:
+                        loadout_name: str,
+                        skill: Optional["ResolvedSkill"] = None) -> None:
     """Materialize one skill as a PROJECT-scoped Claude Code skill.
 
     Writes `<root>/<name>/SKILL.md`, which the CLI discovers under `project`
@@ -108,6 +308,22 @@ def _write_native_skill(root: Path, name: str, src: Path,
     """
     dst_dir = root / name
     dst_dir.mkdir(parents=True, exist_ok=True)
+
+    # A directory-form skill brings its whole tree. `references/` and
+    # `scripts/` sit beside SKILL.md and the guide links to them; copying the
+    # markdown alone delivers an index of dangling links, which for a guide
+    # whose substance is in references/ is most of the guide. Copied first so
+    # the SKILL.md written below (possibly with synthesized frontmatter) wins.
+    if skill is not None and skill.is_dir:
+        for item in skill.root.iterdir():
+            if item.name == skill.doc.name:
+                continue
+            dest = dst_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, dest)
+
     text = src.read_text()
     if not text.lstrip().startswith("---"):
         where = f" (from the {loadout_name} loadout)" if loadout_name else ""
@@ -118,10 +334,13 @@ def _write_native_skill(root: Path, name: str, src: Path,
 
 
 def prepare_skills(skills: list, sandbox_dir: str | Path, *,
-                   loadout_name: str = "", native_dir: str | Path | None = None) -> str:
+                   loadout_name: str = "", native_dir: str | Path | None = None,
+                   toolbase_loadout: str | None = None) -> tuple:
     """Materialize a loadout's skills for one trial.
 
-    Returns the system-prompt addendum ('' when there is nothing to add).
+    Returns ``(system_prompt_addendum, records)`` -- the addendum is '' when
+    there is nothing to add, and ``records`` are provenance dicts naming what
+    was RESOLVED for the trial record.
     Raises on a missing file or malformed entry — a skill the loadout declares
     but the agent never receives would corrupt the measurement silently.
 
@@ -143,30 +362,44 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
     matters: a skill must reach exactly the arm whose loadout declares it.
     """
     if not skills:
-        return ""
+        return "", []
     sandbox = Path(sandbox_dir)
     native_root = Path(native_dir) if native_dir is not None else None
     pointers: list[str] = []
     inline_blocks: list[str] = []
     agents_blocks: list[tuple[str, str, str, str]] = []
 
-    for entry in skills:
-        name, src, mode = _parse_entry(entry, loadout_name=loadout_name)
-        if not src.is_file():
-            raise FileNotFoundError(
-                f"loadout {loadout_name!r}: skill {name!r} file not found: "
-                f"{src}"
-            )
+    specs = [_parse_entry(e, loadout_name=loadout_name) for e in skills]
+    # One query for the whole arm, and only when something needs it -- a
+    # benchmark-local skill must not make a trial depend on toolbase.
+    rows = (_toolbase_skill_rows(toolbase_loadout)
+            if any(sp["kind"] == "toolbase" for sp in specs) else {})
+    resolved = [_resolve_spec(sp, loadout_name=loadout_name,
+                              toolbase_rows=rows) for sp in specs]
+
+    for skill in resolved:
+        name, src, mode = skill.name, skill.doc, skill.mode
         if mode == "inline":
             inline_blocks.append(
                 f"### Skill: {name}\n{src.read_text().strip()}"
             )
         elif native_root is not None:
-            _write_native_skill(native_root, name, src, loadout_name)
+            _write_native_skill(native_root, name, src, loadout_name,
+                                skill=skill)
         else:  # on_demand, portable fallback
             dst = sandbox / SKILLS_SUBDIR / f"{name}{src.suffix or '.md'}"
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
+            if skill.is_dir:
+                # Same reason as the native path: the guide links sideways.
+                for item in skill.root.iterdir():
+                    if item.name == skill.doc.name:
+                        continue
+                    target = dst.parent / item.name
+                    if item.is_dir():
+                        shutil.copytree(item, target, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(item, target)
             desc = _frontmatter_description(src)
             pointers.append(f"- {dst.relative_to(sandbox)}: {name}"
                             + (f" — {desc}" if desc else ""))
@@ -184,7 +417,7 @@ def prepare_skills(skills: list, sandbox_dir: str | Path, *,
         )
     if inline_blocks:
         parts.append("\n\n".join(inline_blocks))
-    return "\n\n".join(parts)
+    return "\n\n".join(parts), [sk.record() for sk in resolved]
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -239,6 +472,21 @@ def _write_agents_doc(sandbox: Path, blocks) -> None:
 
 
 def skill_names(skills: list) -> list[str]:
-    """The declared skill names, for the trial record (best-effort: no
-    validation here; `prepare_skills` is the strict gate)."""
-    return [str(e.get("name", "?")) for e in skills or [] if isinstance(e, dict)]
+    """The DECLARED skill names (best-effort; `prepare_skills` is the strict
+    gate, and its records are what the trial recordings use).
+
+    Handles both entry forms: a `toolbase:` reference has no `name:` of its
+    own unless one is given, and falls back to its slug.
+    """
+    out = []
+    for e in skills or []:
+        if not isinstance(e, dict):
+            continue
+        if e.get("name"):
+            out.append(str(e["name"]))
+        elif e.get("toolbase"):
+            ref = str(e["toolbase"])
+            out.append(ref.split("__", 1)[1] if "__" in ref else ref)
+        else:
+            out.append("?")
+    return out

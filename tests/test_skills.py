@@ -37,11 +37,11 @@ class TestPrepareSkills(unittest.TestCase):
         return e
 
     def test_no_skills_no_addendum(self):
-        self.assertEqual(prepare_skills([], self.sandbox), "")
-        self.assertEqual(prepare_skills(None, self.sandbox), "")
+        self.assertEqual(prepare_skills([], self.sandbox)[0], "")
+        self.assertEqual(prepare_skills(None, self.sandbox)[0], "")
 
     def test_on_demand_copies_and_points(self):
-        addendum = prepare_skills([self._entry()], self.sandbox)
+        addendum, _ = prepare_skills([self._entry()], self.sandbox)
         copied = self.sandbox / "skills" / "recipe.md"
         self.assertTrue(copied.is_file())
         self.assertIn("Use add()", copied.read_text())
@@ -49,7 +49,7 @@ class TestPrepareSkills(unittest.TestCase):
         self.assertNotIn("Use add()", addendum)   # pointer, not content
 
     def test_inline_embeds_content(self):
-        addendum = prepare_skills([self._entry(mode="inline")], self.sandbox)
+        addendum, _ = prepare_skills([self._entry(mode="inline")], self.sandbox)
         self.assertIn("Use add() then power()", addendum)
         self.assertFalse((self.sandbox / "skills").exists())
 
@@ -60,7 +60,7 @@ class TestPrepareSkills(unittest.TestCase):
 
     def test_native_writes_a_project_skill_and_no_pointer(self):
         """The CLI advertises name+description itself, so no addendum."""
-        addendum = prepare_skills([self._entry()], self.sandbox,
+        addendum, _ = prepare_skills([self._entry()], self.sandbox,
                                   native_dir=self._native())
         doc = self._native() / "recipe" / "SKILL.md"
         self.assertTrue(doc.is_file())
@@ -99,7 +99,7 @@ class TestPrepareSkills(unittest.TestCase):
         self.assertTrue(str(doc).startswith(str(self.sandbox.resolve())))
 
     def test_inline_still_inlines_even_with_native_dir(self):
-        addendum = prepare_skills([self._entry(mode="inline")], self.sandbox,
+        addendum, _ = prepare_skills([self._entry(mode="inline")], self.sandbox,
                                   native_dir=self._native())
         self.assertIn("Use add() then power()", addendum)
         self.assertFalse(self._native().exists())
@@ -178,9 +178,139 @@ class TestSkillsReachTheAgent(unittest.TestCase):
         )
         self.assertTrue(llm.system_texts)
         self.assertIn("skills/distance_recipe.md", llm.system_texts[0])
-        # The trial record carries the skill names.
+        # The trial record carries what was RESOLVED, not just a name: a run
+        # has to be able to say which file supplied the guidance it measured.
         tj = read_json(Path(tmp.name) / "trials" / "t0" / "trial.json")
-        self.assertEqual(tj["config"]["skills"], ["distance_recipe"])
+        rec = tj["config"]["skills"]
+        self.assertEqual([r["name"] for r in rec], ["distance_recipe"])
+        self.assertEqual(rec[0]["source"], "benchmark")
+        self.assertTrue(rec[0]["path"].endswith("distance_recipe.md"))
+        self.assertIs(rec[0]["is_dir"], False)
+
+
+class TestToolbaseSourcedSkills(unittest.TestCase):
+    """A skill served by toolbase with its toolkit, not shipped by the benchmark."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.sandbox = root / "sandbox"
+        self.sandbox.mkdir()
+        # A dir-form skill: SKILL.md plus the references/ it links to.
+        self.skill_root = root / "cache" / "editable" / "skills" / "feynrules"
+        (self.skill_root / "references").mkdir(parents=True)
+        (self.skill_root / "SKILL.md").write_text(
+            "---\nname: feynrules\ndescription: Build a model.\n---\n"
+            "See references/pitfalls.md.\n")
+        (self.skill_root / "references" / "pitfalls.md").write_text("## P1\n")
+        self.rows = {
+            ("heptapod", "feynrules"): {
+                "slug": "feynrules", "state": "on", "bundle": "feynrules",
+                "doc": str(self.skill_root / "SKILL.md"),
+                "root": str(self.skill_root), "is_dir": True,
+                "version": "editable",
+            },
+            ("heptapod", "mg5"): {
+                "slug": "mg5", "state": "not-enabled", "bundle": "mg5",
+                "doc": "x", "root": "x", "is_dir": True, "version": "editable",
+            },
+        }
+
+    def _prepare(self, entry, **kw):
+        import toolbench.core.skills as m
+        orig = m._toolbase_skill_rows
+        m._toolbase_skill_rows = lambda _lo: self.rows
+        try:
+            return m.prepare_skills([entry], self.sandbox,
+                                    loadout_name="tools_model", **kw)
+        finally:
+            m._toolbase_skill_rows = orig
+
+    def test_dir_form_skill_brings_its_references(self):
+        """The whole point: a guide that links sideways must arrive whole."""
+        native = self.sandbox / ".claude" / "skills"
+        self._prepare({"toolbase": "heptapod__feynrules"}, native_dir=native)
+        dst = native / "feynrules"
+        self.assertTrue((dst / "SKILL.md").is_file())
+        self.assertTrue(
+            (dst / "references" / "pitfalls.md").is_file(),
+            "references/ did not come along — the guide's links now dangle",
+        )
+
+    def test_portable_fallback_also_brings_references(self):
+        self._prepare({"toolbase": "heptapod__feynrules"})
+        base = self.sandbox / "skills"
+        self.assertTrue((base / "feynrules.md").is_file())
+        self.assertTrue((base / "references" / "pitfalls.md").is_file())
+
+    def test_record_names_the_slot_it_came_from(self):
+        _add, rec = self._prepare({"toolbase": "heptapod__feynrules"})
+        self.assertEqual(rec[0]["source"], "toolbase:heptapod@editable")
+        self.assertEqual(rec[0]["toolkit"], "heptapod")
+        self.assertEqual(rec[0]["slug"], "feynrules")
+        self.assertEqual(rec[0]["version"], "editable")
+        self.assertIs(rec[0]["is_dir"], True)
+
+    def test_a_skill_that_would_not_surface_is_refused(self):
+        """Strict, like a missing file: a declared skill the agent never gets
+        is a thinner arm than the measurement claims."""
+        with self.assertRaises(ValueError) as cm:
+            self._prepare({"toolbase": "heptapod__mg5"})
+        self.assertIn("not-enabled", str(cm.exception))
+
+    def test_an_unknown_skill_is_refused(self):
+        with self.assertRaises(ValueError):
+            self._prepare({"toolbase": "heptapod__nope"})
+
+    def test_malformed_reference_is_refused(self):
+        from toolbench.core.skills import _parse_entry
+        with self.assertRaises(ValueError):
+            _parse_entry({"toolbase": "feynrules"}, loadout_name="x")
+
+    def test_toolbase_and_file_together_are_refused(self):
+        from toolbench.core.skills import _parse_entry
+        with self.assertRaises(ValueError):
+            _parse_entry({"toolbase": "heptapod__feynrules", "file": "a.md"},
+                         loadout_name="x")
+
+
+class TestServingSlotSelection(unittest.TestCase):
+    """`tb list --json` emits one entry per installed slot."""
+
+    def test_only_the_serving_active_slot_is_used(self):
+        """Filtering by toolkit name alone picks an arbitrary slot.
+
+        In practice it picks the highest version rather than the pinned one,
+        which hands a run the skill from a release it is not serving — the
+        two copies genuinely differ.
+        """
+        import json as _json
+        from unittest import mock
+        import toolbench.core.skills as m
+
+        payload = [
+            {"name": "heptapod", "version": "2.9.1", "serving": False,
+             "active": True, "skills": [
+                 {"slug": "feynrules", "state": "on", "bundle": None,
+                  "doc": "/cache/2.9.1/skills/feynrules/SKILL.md",
+                  "root": "/cache/2.9.1/skills/feynrules", "is_dir": True}]},
+            {"name": "heptapod", "version": "editable", "serving": True,
+             "active": True, "skills": [
+                 {"slug": "feynrules", "state": "on", "bundle": None,
+                  "doc": "/cache/editable/skills/feynrules/SKILL.md",
+                  "root": "/cache/editable/skills/feynrules", "is_dir": True}]},
+            {"name": "other", "version": "1.0", "serving": True,
+             "active": False, "skills": [
+                 {"slug": "ignored", "state": "on", "bundle": None,
+                  "doc": "d", "root": "r", "is_dir": False}]},
+        ]
+        proc = mock.Mock(returncode=0, stdout=_json.dumps(payload), stderr="")
+        with mock.patch.object(m.subprocess, "run", return_value=proc):
+            rows = m._toolbase_skill_rows("hep-model")
+        self.assertEqual(set(rows), {("heptapod", "feynrules")})
+        self.assertEqual(rows[("heptapod", "feynrules")]["version"], "editable")
+        self.assertIn("editable", rows[("heptapod", "feynrules")]["root"])
 
 
 if __name__ == "__main__":
@@ -259,7 +389,7 @@ class TestPointerCarriesDescription(unittest.TestCase):
         return [{"name": "guide", "file": str(p)}]
 
     def test_description_is_carried_into_the_pointer(self):
-        add = prepare_skills(self._skill(
+        add, _ = prepare_skills(self._skill(
             "---\nname: A Guide\ndescription: Process selection and the traps"
             " that rescale a result.\n---\n\nBody.\n"), self.sandbox)
         self.assertIn("skills/guide.md", add)
@@ -269,13 +399,13 @@ class TestPointerCarriesDescription(unittest.TestCase):
         for text in ("no frontmatter at all\n",
                      "---\nname: only a name\n---\nbody\n",
                      "---\nunterminated: block\n"):
-            add = prepare_skills(self._skill(text), self.sandbox)
+            add, _ = prepare_skills(self._skill(text), self.sandbox)
             self.assertIn("skills/guide.md", add)       # pointer still emitted
             self.assertNotIn("None", add)
 
     def test_native_delivery_needs_no_pointer(self):
         """Native runtimes surface the description themselves."""
-        add = prepare_skills(self._skill(
+        add, _ = prepare_skills(self._skill(
             "---\nname: A\ndescription: D.\n---\nbody\n"), self.sandbox,
             native_dir=self.sandbox / ".claude" / "skills")
         self.assertEqual(add, "")

@@ -41,7 +41,7 @@ from .llm_factory import StubLLM, build_llm
 from .loadout import Loadout
 from .metrics import cost_usd, per_trial_reach
 from .runtime import build_agent
-from .skills import prepare_skills, skill_names
+from .skills import prepare_skills
 from .store import write_json, write_jsonl_gz
 from .task import Grade, Task
 from .tool_resolver import build_agent_tools, release_sources
@@ -503,9 +503,18 @@ class TrialRunner:
         if loadout.system_prompt_addendum:
             system_prompt = (f"{system_prompt}\n\n"
                              f"{loadout.system_prompt_addendum}")
-        skills_addendum = prepare_skills(loadout.skills, sandbox_dir,
-                                         loadout_name=loadout.name,
-                                         native_dir=native_skills_dir)
+        # The toolbase loadout this arm serves from, so a `toolbase:` skill
+        # resolves against the SAME curation the tools came from rather than
+        # whatever happens to be the active default.
+        _tb_loadout = None
+        for _src in loadout.sources:
+            if _src.backend == "toolbase" and isinstance(_src.config, dict):
+                _tb_loadout = _src.config.get("loadout") or _tb_loadout
+        skills_addendum, skill_records = prepare_skills(
+            loadout.skills, sandbox_dir,
+            loadout_name=loadout.name,
+            native_dir=native_skills_dir,
+            toolbase_loadout=_tb_loadout)
         if skills_addendum:
             system_prompt = f"{system_prompt}\n\n{skills_addendum}"
 
@@ -972,7 +981,12 @@ class TrialRunner:
                     "loop": harness.loop,
                 },
                 "loadout": loadout.name,
-                "skills": skill_names(loadout.skills),
+                # What was RESOLVED, not what was declared: toolkit, slug and
+                # the slot it came from. A run recording only "feynrules"
+                # cannot say which of several installed slots supplied it, and
+                # they differ -- the same skill in two slots of one toolkit had
+                # 11 pitfall entries in one and 6 in the other.
+                "skills": skill_records,
                 # Recorded verbatim: it is part of the measured treatment, and
                 # a reader comparing two campaigns must be able to see whether
                 # an arm was framed to reach for its tools.
