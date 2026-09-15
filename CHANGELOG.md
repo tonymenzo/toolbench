@@ -8,6 +8,117 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-15
+
+Everything since 0.6.0. `pyproject.toml` was bumped to 0.7.0 in "Scope a trial's
+skills to its own sandbox", but that version was never tagged or published, so
+this release carries its changes too.
+
+The theme is the same throughout: **a trial should receive exactly the
+configuration its arm declares, and the run should be able to prove what that
+was.** Most of what follows is a hole in one half of that or the other.
+
+### Added
+
+- **A loadout can source a skill from toolbase.** `skills:` previously took
+  `{name, file}` only, so a skill shipping with a toolkit could be reached only
+  by hardcoding a path into someone else's checkout — which pins the wrong
+  thing, since the path is stable while the version toolbase serves is not.
+
+  ```yaml
+  skills:
+    - toolbase: heptapod__feynrules   # the name `tb activate` uses
+    - name: distance_recipe           # unchanged
+      file: ./skills/distance_recipe.md
+  ```
+
+  Resolution goes through `tb list --json` rather than toolbase internals: the
+  answer folds in two-layer config resolution, bundle availability, the slot's
+  install scope, the loadout's allow/blocklists and slug normalisation, and most
+  of that machinery is private. Requires toolbase ≥ 0.16.0.
+
+  Only the **serving, active** slot is used. `tb list --json` emits one entry per
+  installed slot, so a toolkit with five versions installed yields five rows for
+  one skill pointing at five copies; filtering by name alone takes an arbitrary
+  one, in practice the highest version rather than the pinned one. The copies
+  genuinely differ.
+
+- **Loadouts can carry a `system_prompt_addendum`.** A domain harness is tools +
+  skills + the framing that says the toolset exists and is the intended path.
+  Only the first two were modelled, so a `tools_*` arm measured a bundle nobody
+  would deploy. It lives on the loadout, never reaching a no-tools arm where it
+  would describe tools that are not there.
+
+- **The manifest records the ambient environment and the benchmark's own SHA.**
+  A tools arm reaches into a pinned toolkit venv and that version was already
+  recorded; a no-tools arm reaches into whatever the machine has, which is just
+  as much part of the measured configuration because the control arm's
+  capability rests on it entirely.
+
+- **The runner records when an agent rewrites its own sandbox seed.** The seed is
+  a contract: `bare` ships one file the rubric is written against, and nothing
+  stopped an agent clobbering it and validating against its own substitute.
+
+### Changed
+
+- **Skills are delivered whole.** A directory-form skill keeps `references/` and
+  `scripts/` beside its `SKILL.md` and the guide links to them; copying the
+  markdown alone shipped an index of dangling links. Both delivery paths now
+  bring the tree, and toolbase's `is_dir` distinguishes directory-form skills
+  from flat single-file ones, which would break if copied as a tree.
+
+- **Skills resolve where tools resolve**, inside `build_agent_tools`. That is
+  what the CLI's pre-run resolution preview calls, so a skill that would not
+  reach the agent now fails before any trial starts and the arm recorded under
+  `manifest["resolution"]` describes both halves of the loadout rather than only
+  its tools.
+
+- **The trial record names what was resolved, not what was declared.**
+  `"skills": ["feynrules"]` became a record carrying toolkit, slug, slot, path
+  and form. The same skill differs between installed slots of one toolkit, and
+  a bare name cannot say which supplied the guidance a run measured.
+
+- **A declared skill that would not surface is now an error** — `not-enabled`,
+  `gated` or `off` raises at resolution with the reason and its fix, matching
+  how a missing `file:` was already treated. An arm thinner than the
+  measurement claims fails silently in the results otherwise.
+
+- **Codex delivers a guide in full via `AGENTS.md`, not as a pointer.** The
+  pointer left "did the agent choose to open the file" inside the measurement,
+  and on one run that nuisance variable dominated: six tools served and visible,
+  the guide in the sandbox, neither touched in fifteen turns.
+
+- **The prompt pointer carries the skill's description.** Runtimes with a native
+  skill concept surface name and description themselves; runtimes without one
+  got `- skills/<slug>.md: <slug>`, the slug twice, saying nothing about when
+  the file matters.
+
+- **Paired condition deltas are computed from the graded score**, not from
+  binary stages. The headline ablation number was structurally incapable of
+  reporting an effect.
+
+- (breaking, internal) `prepare_skills` returns `(addendum, records)` rather
+  than the addendum alone.
+
+### Fixed
+
+- **Ambient user settings no longer leak into a trial.** The `claude_code`
+  runtime drives the real CLI, which loaded the machine's own settings and every
+  guide in `~/.claude/skills/` into every arm of every run — including a
+  `core_only` arm defined not to have them, with nothing in the manifest
+  recording it.
+
+- **Trial sandboxes no longer inherit the benchmark repo's project skills.**
+  Sandboxes live inside the repo, so the CLI resolved project scope from the
+  enclosing root and every trial inherited `.claude/skills/` — in one case a
+  guide describing the benchmark system and where `ground_truth/` lives.
+
+- **A trial's Bash cannot read the repo's git object store.** Deny-reading the
+  benchmark directory does not protect the answer key: git keeps a second copy
+  of every tracked file in `.git/objects`, and `git show HEAD:<path>` reads it
+  without touching the working tree.
+
+
 ## [0.6.0] — 2026-08-03
 
 ### Changed (breaking)
