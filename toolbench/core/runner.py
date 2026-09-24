@@ -876,13 +876,28 @@ class TrialRunner:
             )
         elif (last_response is not None
               and not getattr(last_response, "tool_calls", None)
-              and grade.failure_mode != NONE):
+              and grade.failure_mode != NONE
+              and not any(grade.stages.values())):
             # The agent loop exited because the model returned a
             # Response with no tool calls — i.e. the model thought it
             # was done — but the rubric is incomplete. Distinct from
             # AGENT_CRASH (no exception) and INCOMPLETE_AT_X (which we
             # reserve for max-iter / unfinished work where the model
             # was still issuing tool calls).
+            #
+            # `not any(stages)` IS LOAD BEARING. "The model thought it was
+            # done" is equally true of an agent that quit mid-execution and
+            # one that finished the task and got it wrong, and only the first
+            # is stopping early. Without the guard every confidently-wrong
+            # trial -- the most common outcome in a capability benchmark --
+            # was relabelled from the judge's INCOMPLETE_AT_<rung> to a
+            # process-failure name, discarding which rung it actually reached.
+            # It also cost the evidence line: the footer prints stage evidence
+            # for INCOMPLETE_AT_X but `judge_notes` for this mode, which is
+            # empty on a clean stop, so the summary said nothing at all.
+            #
+            # A genuine mid-task stop still lands here: having written no
+            # deliverable, its first rubric stage fails, so no stage passes.
             grade.failure_mode = MODEL_STOPPED_EARLY
 
         # Post-grade LLM-judge phase (opt-in, SERIAL, non-authoritative).
