@@ -8,6 +8,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-09-24
+
+### Fixed
+
+- **A model that finishes the task and gets it wrong is no longer labelled as
+  having stopped early.** `MODEL_STOPPED_EARLY` was applied whenever the agent
+  loop exited on a response carrying no tool calls and the rubric was
+  incomplete. "The model thought it was done" is equally true of an agent that
+  quit mid-execution and one that produced the whole deliverable and got the
+  answer wrong, and only the first is stopping early — so the condition fired on
+  both, and since a complete, confident, wrong answer is the most common outcome
+  in a capability benchmark, in practice it relabelled nearly everything.
+
+  The override replaced the judge's `INCOMPLETE_AT_<stage>` with a
+  process-failure name, discarding which rung the trial reached, and it silenced
+  the reason as well: the footer prints stage evidence for `INCOMPLETE_AT_X` but
+  `judge_notes` for this mode, and `judge_notes` is empty on a clean stop. A
+  three-trial symbolic run reported `MODEL_STOPPED_EARLY 3` and not one word
+  about why, while the judge had correctly identified a *different* failed rung
+  for each trial.
+
+  The guard is `not any(grade.stages.values())` — any passed stage means the
+  trial produced gradeable work and keeps its rung. `any` rather than "did the
+  first stage pass", because a non-gating rubric of independent tolerance rungs
+  gives its first stage no special standing. An agent that quits mid-execution
+  has written no deliverable, so its first stage fails, so no stage passes, and
+  it still lands on `MODEL_STOPPED_EARLY`.
+
+  This also ends a disagreement between run time and regrade: `failure_modes`
+  already documents that regrade "may legitimately upgrade it to NONE /
+  INCOMPLETE_AT_<id>", and it does, so the same artifacts were labelled one way
+  when produced and another when re-judged. They now agree.
+
+  **Scores are unaffected.** `MODEL_STOPPED_EARLY` is in neither
+  `HARD_PROCESS_FAILURES` nor `EXCLUDED_FROM_METRICS`, so reach, pass@k and
+  pass^k are identical either way. What changes is only which bucket a trial is
+  reported in.
+
+  **Failure-mode distributions are therefore NOT comparable across this
+  boundary.** A campaign run on 0.8.0 and one on 0.8.1 will bucket identical
+  model behaviour differently, so do not diff two runs' FAILURES blocks across
+  the gap and read it as a change in the models. `toolbench regrade --run-id
+  <id>` re-derives the labels for a finished run from its preserved artifacts
+  and brings it onto the new convention without re-running any trials.
+
+- **`toolbench.__version__` is derived from package metadata instead of
+  hardcoded.** It sat at `"0.4.0"` through four minor releases. Nothing caught
+  the drift because nothing reads it: the CLI and the run manifest call
+  `importlib.metadata.version("toolbench")`, so the exported constant was dead
+  code telling anything that did read it the wrong release. It now reads the
+  same source the CLI does, falling back to `0.0.0+unknown` in a source tree
+  that was never installed, which makes the two incapable of disagreeing.
+
 ## [0.8.0] — 2026-09-15
 
 Everything since 0.6.0. `pyproject.toml` was bumped to 0.7.0 in "Scope a trial's
