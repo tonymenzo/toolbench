@@ -43,6 +43,7 @@ from .metrics import cost_usd, per_trial_reach
 from .runtime import build_agent
 from .skills import prepare_skills
 from .store import write_json, write_jsonl_gz
+from .trial_start import record_trial_start
 from .task import Grade, Task
 from .tool_resolver import build_agent_tools, release_sources
 from .trajectory import Trajectory, TrajectoryHook, make_agent_display_hook
@@ -581,6 +582,8 @@ class TrialRunner:
                 # Dry-run: skip the LLM call entirely. Persist a minimal
                 # record so the rest of the harness (grading, cleanup,
                 # summary) can be validated end-to-end with zero cost.
+                record_trial_start(trial_dir, sandbox_dir,
+                                   system_prompt=system_prompt, user_prompt=prompt)
                 trajectory.final_response = "[dry-run: agent.run skipped]"
             else:
                 display_hook = make_agent_display_hook(traj_hook) if self.verbose else None
@@ -607,6 +610,10 @@ class TrialRunner:
                         + _git_object_stores(benchmark_dir)
                     ),
                 )
+                # After the runtime's own setup, before the agent's first turn:
+                # everything in the sandbox now is initial state.
+                record_trial_start(trial_dir, sandbox_dir,
+                                   system_prompt=system_prompt, user_prompt=prompt)
                 # One resume loop over the SAME agent / sandbox / context.
                 # After each agent.run we either:
                 #   (a) recover a MODEL_FORMAT_CRASH (nondeterministic
