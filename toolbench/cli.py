@@ -2401,24 +2401,38 @@ def _export(run_id: str, out: str | None, include_transcripts: bool,
     return 0
 
 
-@cli.command("dashboard", short_help="Watch a campaign of runs live in the browser.")
-@click.argument("directory", required=False, default=None,
-                type=click.Path(exists=True, file_okay=False, path_type=Path))
+@cli.command("dashboard", short_help="Watch a run live in the browser.")
+@click.argument("target", required=False, default=None)
 @click.option("--host", default="127.0.0.1", show_default=True,
               help="Interface to bind. Keep the default and use an SSH port "
-                   "forward to view a remote campaign.")
+                   "forward to view a remote run.")
 @click.option("--port", type=int, default=8765, show_default=True,
               help="Port to serve on (0 picks a free one).")
 @click.option("--poll", "poll_s", type=float, default=3.0, show_default=True,
               help="Seconds between browser refreshes.")
-def _dashboard(directory: Path | None, host: str, port: int, poll_s: float) -> int:
-    """Serve a read-only live view of every run under DIRECTORY (default:
-    ./runs): queued, running and finished trials per cell, spend, and each
-    run's summary once it finalizes. Any directory works as a campaign;
-    every manifest.json beneath it is treated as a run."""
-    from toolbench.dashboard import serve
+def _dashboard(target: str | None, host: str, port: int, poll_s: float) -> int:
+    """Serve a read-only live view of a run: its trial matrix, the trial
+    being worked on, recent results, and the summary once it finalizes.
 
-    serve(directory or _runs_root(), host=host, port=port, poll_s=poll_s)
+    TARGET is a run directory or a run id under ./runs; omitted, the most
+    recently started run is shown. A directory holding several runs (a
+    campaign, at any nesting depth) adds a run picker to the page.
+    """
+    from toolbench.dashboard import serve
+    from toolbench.dashboard.state import discover_runs
+
+    if target is None:
+        runs = discover_runs(_runs_root()) if _runs_root().is_dir() else []
+        if not runs:
+            raise click.ClickException(f"no runs under {_runs_root()}")
+        root = max(runs, key=lambda d: (d / "manifest.json").stat().st_mtime)
+    elif Path(target).is_dir():
+        root = Path(target)
+    elif (_runs_root() / target).is_dir():
+        root = _runs_root() / target
+    else:
+        raise click.ClickException(f"no run directory or run id: {target}")
+    serve(root, host=host, port=port, poll_s=poll_s)
     return 0
 
 

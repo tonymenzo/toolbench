@@ -3,59 +3,62 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>toolbench dashboard</title>
+  <title>toolbench</title>
   <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <span class="brand-name">toolbench</span>
-      <span class="brand-sep" aria-hidden="true">/</span>
-      <span id="campaign-name" class="campaign-name">…</span>
+  <header class="bar">
+    <div class="bar-left">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="wordmark">toolbench</span>
+      <span class="slash" aria-hidden="true">/</span>
+      <span id="bench" class="bench"></span>
+      <label id="picker-wrap" class="picker" hidden>
+        <span class="visually-hidden">Run</span>
+        <select id="picker"></select>
+      </label>
     </div>
-    <div class="topbar-meta">
-      <span id="refresh-state" class="refresh-state" aria-live="polite"></span>
-      <button id="theme-toggle" class="icon-button" type="button"
-              aria-label="Toggle dark mode" title="Toggle dark mode">◐</button>
+    <div class="bar-right">
+      <span id="liveness" class="liveness"></span>
+      <button id="theme" class="ghost" type="button" aria-label="Toggle dark mode">◐</button>
     </div>
   </header>
 
-  <main>
-    <section id="overview" class="overview" aria-label="Campaign overview"></section>
+  <main id="app">
+    <section class="head" aria-label="Run">
+      <div id="run-id" class="run-id"></div>
+      <dl id="figures" class="figures"></dl>
+      <div id="progress" class="progress" role="img"></div>
+      <div id="notice" class="notice" hidden></div>
+    </section>
 
-    <div class="workspace">
-      <aside class="runs-pane" aria-label="Runs">
-        <div class="pane-head">
-          <h2>Runs</h2>
-          <div id="run-filter" class="segmented" role="group" aria-label="Filter runs">
-            <button type="button" data-filter="all" aria-pressed="true">All</button>
-            <button type="button" data-filter="live" aria-pressed="false">Live</button>
-            <button type="button" data-filter="attention" aria-pressed="false">Attention</button>
-          </div>
+    <div class="body">
+      <section class="primary">
+        <nav class="views" role="tablist" aria-label="View">
+          <button type="button" role="tab" data-view="matrix" aria-selected="true">matrix</button>
+          <button type="button" role="tab" data-view="summary" aria-selected="false">summary</button>
+        </nav>
+        <div id="view-matrix">
+          <div id="legend" class="legend"></div>
+          <div id="matrix" class="matrix"></div>
+          <h2 class="label recent-label">recent</h2>
+          <ol id="recent" class="recent"></ol>
         </div>
-        <ul id="run-list" class="run-list"></ul>
-      </aside>
-
-      <section id="run-detail" class="run-detail" aria-label="Run detail">
-        <p class="empty">Select a run.</p>
+        <pre id="view-summary" class="summary" hidden></pre>
       </section>
+
+      <aside class="inspector" aria-label="Trial">
+        <div class="inspector-head">
+          <h2 class="label">trial</h2>
+          <button id="follow" class="ghost follow" type="button"></button>
+        </div>
+        <div id="trial-id" class="trial-id">—</div>
+        <div id="inspector"></div>
+      </aside>
     </div>
   </main>
 
-  <aside id="trial-drawer" class="drawer" aria-label="Trial detail" hidden>
-    <div class="drawer-head">
-      <div>
-        <div class="eyebrow">Trial</div>
-        <h3 id="drawer-title"></h3>
-      </div>
-      <button id="drawer-close" class="icon-button" type="button" aria-label="Close">✕</button>
-    </div>
-    <div id="drawer-body" class="drawer-body"></div>
-  </aside>
-
-  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
-
+  <div id="tip" class="tip" role="tooltip" hidden></div>
   <script src="/static/dashboard.js"></script>
 </body>
 </html>

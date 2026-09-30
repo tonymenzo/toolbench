@@ -10,11 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
-- **`toolbench dashboard [DIR]`**: a read-only live view of a campaign in the browser.
-  Any directory is a campaign, and every `manifest.json` under it is a run. It shows a
-  trial grid per cell (queued, running, finished, errored, interrupted), running reach
-  and pass counts, spend against budget, an ETA, each trial's live log, and the run's
-  `summary.txt` once it finalizes. Standard library only; binds to `127.0.0.1`.
+- **`toolbench dashboard [TARGET]`**: a read-only live view of a run in the browser.
+  With no target it opens the most recently started run. It shows headline figures,
+  a trial matrix per cell (queued, running, reach-shaded, errored, interrupted), a
+  docked inspector that follows the active trial's live log, recent completions, and
+  `summary.txt` once the run finalizes. Given a directory of runs, it adds a run
+  picker. Standard library only; binds to `127.0.0.1`.
 - **`plan.json`** in each run directory: the full trial list in execution order,
   written before the first trial. `resume` backfills it for older runs.
 - **`status.json`** in each run directory: run state (`running`, `finished`,

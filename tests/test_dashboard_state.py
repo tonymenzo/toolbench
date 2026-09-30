@@ -156,3 +156,39 @@ def test_dry_run_writes_plan_and_status_the_dashboard_reads(tmp_path):
     assert r["counts"]["planned"] == 4
     assert r["counts"]["queued"] == r["counts"]["running"] == 0
     assert r["has_summary"]
+
+
+def test_mode_is_run_for_a_run_dir_and_campaign_otherwise(tmp_path):
+    run, _ = _make_run(tmp_path)
+    assert CampaignReader(run).snapshot()["mode"] == "run"
+    assert CampaignReader(run).snapshot()["runs"][0]["id"] == "."
+    assert CampaignReader(tmp_path).snapshot()["mode"] == "campaign"
+
+
+def test_recent_lists_latest_completions_first(tmp_path):
+    run, plan = _make_run(tmp_path)
+    (run / "trials.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        _row(plan[0], ok=True, score=1.0),
+        _row(plan[1], ok=False, score=0.3)]))
+    recent = CampaignReader(tmp_path).snapshot()["runs"][0]["recent"]
+    assert [(t["trial_id"], t["state"]) for t in recent] == [
+        (plan[1]["trial_id"], "failed"), (plan[0]["trial_id"], "passed")]
+
+
+def test_cli_target_defaults_to_latest_run_and_accepts_run_ids(tmp_path, monkeypatch):
+    import os
+    import toolbench.cli as cli
+    import toolbench.dashboard as dashboard
+
+    older, _ = _make_run(tmp_path / "runs", "older")
+    newer, _ = _make_run(tmp_path / "runs", "newer")
+    os.utime(older / "manifest.json", (1, 1))
+    served = []
+    monkeypatch.setattr(dashboard, "serve", lambda root, **kw: served.append(Path(root)))
+    monkeypatch.setattr(cli, "_OUTPUT_BASE", tmp_path)
+
+    assert cli.main(["dashboard"]) == 0
+    assert cli.main(["dashboard", "older"]) == 0
+    assert cli.main(["dashboard", str(tmp_path / "runs")]) == 0
+    assert served == [newer, (tmp_path / "runs" / "older").resolve(), tmp_path / "runs"]
+    assert cli.main(["dashboard", "missing"]) == 1

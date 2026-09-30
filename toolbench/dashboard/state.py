@@ -38,6 +38,8 @@ _LEAK_MODE = "INTEGRITY_LEAK"
 
 # Bytes of a trial's console.log returned to the detail view.
 LOG_TAIL_BYTES = 64 * 1024
+# Finished trials listed in a run's "recent" feed.
+RECENT_TRIALS = 8
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -189,19 +191,23 @@ class CampaignReader:
     # ── public API ──────────────────────────────────────────────────
 
     def snapshot(self) -> dict:
-        """The full dashboard state: every run with its cells and trials."""
+        """The full dashboard state: every run with its cells and trials.
+
+        `mode` is "run" when the root is itself a run directory (the page
+        shows that run alone) and "campaign" otherwise (the page offers a
+        run picker).
+        """
         now = time.time()
-        runs = [self._run_state(d, now) for d in discover_runs(self.root)]
+        run_dirs = discover_runs(self.root)
+        runs = [self._run_state(d, now) for d in run_dirs]
         # Live runs first, then newest first.
         runs.sort(key=lambda r: r["created_at"] or "", reverse=True)
         runs.sort(key=lambda r: r["state"] != "running")
-        totals = {k: sum(r["counts"][k] for r in runs) for k in _COUNT_KEYS}
         return {
             "root": str(self.root),
             "name": self.root.name,
+            "mode": "run" if run_dirs == [self.root] else "campaign",
             "generated_at": now,
-            "totals": totals,
-            "spent_usd": round(sum(r["spent_usd"] for r in runs), 4),
             "live_runs": sum(r["state"] == "running" for r in runs),
             "runs": runs,
         }
@@ -350,6 +356,14 @@ class CampaignReader:
             "has_summary": (run_dir / "summary.txt").is_file(),
             "counts": counts,
             "cells": sorted(cell_list, key=lambda c: (str(c["model"]), str(c["condition"]))),
+            # Most recent completions first (trials.jsonl is append-ordered).
+            "recent": [
+                {"trial_id": r.get("trial_id"), "condition": r.get("condition"),
+                 "model": r.get("model"), "score": r.get("score"),
+                 "failure_mode": r.get("failure_mode"),
+                 "wall_clock_s": r.get("wall_clock_s"),
+                 "state": _trial_state(r, True, run_live)}
+                for r in list(rows.values())[-RECENT_TRIALS:][::-1]],
             **live,
         }
 

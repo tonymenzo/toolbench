@@ -16,7 +16,7 @@ is the scannable reference. `toolbench --help` groups the commands, and `toolben
 
 | Command               | Purpose                                                            |
 |-----------------------|--------------------------------------------------------------------|
-| `toolbench dashboard` | Watch every run under a directory live in the browser.             |
+| `toolbench dashboard` | Watch a run live in the browser.                                   |
 
 ## Sharing results
 
@@ -119,7 +119,8 @@ existing field bumps the major.
 ## `toolbench dashboard`
 
 ```bash
-toolbench dashboard [DIRECTORY]      # default: ./runs
+toolbench dashboard                  # the most recently started run under ./runs
+toolbench dashboard <run-id | dir>   # a specific run, or a directory of runs
 ```
 
 | Flag     | Default     | Meaning                                                        |
@@ -128,22 +129,24 @@ toolbench dashboard [DIRECTORY]      # default: ./runs
 | `--port` | `8765`      | Port to serve on (`0` picks a free one).                       |
 | `--poll` | `3`         | Seconds between browser refreshes.                             |
 
-Serves a read-only page for a *campaign*: any directory, where every `manifest.json`
-beneath it is a run, at any depth. For each run it shows a grid of trials per cell (queued,
-running, passed, not passed, errored, integrity-quarantined, or interrupted), the running
-mean reach and pass count per cell, spend against the budget cap, an ETA while the run is
-live, and the run's `summary.txt` once it finalizes. Clicking a trial opens its result,
-stage checklist, tool calls, and the tail of its `console.log`, which updates live while
-the trial runs.
+Serves a read-only live view of one run. At the top are headline figures: trials done,
+active slots, passes, mean reach, spend against the budget cap, and an ETA while the run is
+live. Below them is the trial matrix: one row per cell, one square per seed index. A square
+is queued, running, shaded by reach once finished, errored, integrity-quarantined, or
+interrupted. Next to the matrix, a docked inspector shows the newest active trial and its
+live `console.log`. Clicking any trial pins the inspector to it, with its result, stage
+checklist, and tool calls. Once the run finalizes, a summary view shows `summary.txt`.
+
+Given a directory that holds several runs (a campaign, nested at any depth), the page adds
+a run picker; every `manifest.json` beneath the directory counts as a run.
 
 Whether a run is still alive comes from its `status.json` heartbeat. A run that stops
 heartbeating is shown as **stale** (its process has most likely exited) and its in-flight
 trials as interrupted; `toolbench resume` finishes them. Runs from before `status.json`
 existed show as finished once they have a summary, and otherwise as "no heartbeat".
 
-The server only reads the campaign and never writes to it. To watch a campaign on a
-remote machine, keep the default host and forward the port:
-`ssh -L 8765:localhost:8765 <host>`.
+The server only reads the run and never writes to it. To watch a run on a remote machine,
+keep the default host and forward the port: `ssh -L 8765:localhost:8765 <host>`.
 
 ## Conventions
 
