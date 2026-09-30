@@ -387,7 +387,11 @@ async function renderFiles(run, body) {
       h("span", { class: "sz" }, e.size === null ? "" : fmt.bytes(e.size))));
     body.replaceChildren(crumbs(l.path, openDir),
       h("div", { class: "fmeta" }, source,
-        l.has_init ? h("span", { class: "fkey" }, "+ added  ~ modified  − deleted") : " · no initial snapshot"),
+        l.has_init ? h("span", { class: "fkey" },
+          h("span", { class: "added" }, "+ added"), h("span", { class: "modified" }, "~ modified"),
+          l.source === "sandbox" ? h("span", { class: "deleted" }, "− deleted") : null,
+          h("span", { class: "same" }, "at start"))
+          : " · no initial snapshot"),
       h("ul", { class: "files scroll" }, rows.length ? rows : h("li", { class: "empty" }, "empty")),
       l.truncated ? h("p", { class: "empty" }, "listing truncated") : null);
   }
