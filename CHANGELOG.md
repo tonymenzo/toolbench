@@ -8,6 +8,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-09-30
+
+Token, cost and tool-adoption reporting. No API change and nothing touching
+grading; reported token and cost figures change substantially.
+
+### Fixed
+
+- **`claude_code` token counts were ~10x low.** `_accumulate_usage` summed
+  `usage.iterations`, which carries one entry whatever the turn count; the
+  top-level `usage` block is the aggregate. On one task: input 76,947 reported
+  against 730,550 actual, output 1,026 against 24,999. The error scaled with
+  turn count, so it differed by arm.
+- **No subscription run reported an API-equivalent cost.** A runtime's own figure
+  reached `trial.json` but not `trials.jsonl`, so the cell aggregate read `None`.
+  It now travels on `TrialResult` to the row; a rate-table estimate is a fallback
+  that cannot overwrite it.
+- **Domain-tool adoption was always zero for `claude_code`**, which suppressed
+  the TOOLS section. Detection was `"__" in name`, and that runtime records calls
+  unqualified. A domain tool is now one the arm served, read from
+  `manifest["resolution"]` and matched per loadout on the unqualified name.
+  Script-adoption hints derive from the served set instead of a hardcoded list.
+- **`opening request` was the whole run on `codex`**, which emits one cumulative
+  usage payload. The line is omitted unless the figure is strictly below the
+  total.
+
+### Changed
+
+- **Rates come from `orchestral.llm.<provider>.pricing_model`**, retiring both
+  tables in this repo. Covers dated snapshots and groq, and carries cache-write
+  rates. An unknown model yields no rate record rather than `0.0`: the summary
+  reads `no rates for '<model>'` and prints the token components regardless.
+- **The COST block:**
+
+  ```console
+        cost      $0.00 charged (no metered spend)
+        tokens    822,527 raw in  /  33,283 out          (per trial)
+                       97 uncached  +  702,330 cache read  +  75,850 cache write
+                  222,030 effective in          (uncached-equivalent)
+                   75,858 opening request     (system prompt + tool schemas + task)
+                  $0.3894 API-equivalent      $0.9456 without caching
+  ```
+
+  `effective in` is input re-expressed in uncached-equivalent tokens, solved from
+  an authoritative cost where a runtime reports one. Cache reads bill ~0.1x base,
+  writes ~1.25x (5m TTL) or ~2x (1h).
+- **`tool_calls_by_name` is on the trial record**, so which tools an arm reached
+  needs no transcript decompression.
+
+### Upgrading
+
+Token and cost figures are not comparable with 0.8.1 or earlier. `regrade` cannot
+repair them — the counts were wrong when recorded and raw usage is not retained —
+so a campaign whose token economics matter needs re-running. Scores, reach,
+pass@k and pass^k are unaffected.
+
+### Known approximation
+
+Long-context pricing is applied when `initial_input` exceeds the threshold. That
+field is the first request, so the test under-applies rather than over-applies;
+treat a figure near a threshold as a lower bound.
+
 ## [0.8.1] — 2026-09-24
 
 ### Fixed
