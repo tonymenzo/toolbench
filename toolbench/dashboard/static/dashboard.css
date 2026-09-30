@@ -258,7 +258,9 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px 40px; }
 .tools .n { text-align: right; color: var(--ink-3); }
 .log {
   margin: 6px 0 0; padding: 10px 12px; background: var(--raise); border-radius: 2px;
-  font: 11.5px/1.5 var(--mono); color: var(--ink-2); white-space: pre; overflow: auto;
+  font: 11.5px/1.5 var(--mono); color: var(--ink-2);
+  /* Wrap to the column: keep indentation, break long tokens (paths, ids). */
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; overflow-y: auto;
   flex: 1; min-height: 160px;
 }
 
