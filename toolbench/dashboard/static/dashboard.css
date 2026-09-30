@@ -281,9 +281,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .fmeta { color: var(--ink-3); font-size: 11px; margin: 4px 0 8px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
 /* Legend entries wear the same colours as the marks they explain. */
 .fkey { display: inline-flex; gap: 12px; }
-.fkey .added { color: var(--accent); }
+.fkey .added { color: var(--good); }
 .fkey .modified { color: var(--serious); }
-.fkey .deleted { color: var(--ink-3); text-decoration: line-through; }
+.fkey .deleted { color: var(--critical); text-decoration: line-through; }
 .fkey .same { color: var(--ink-3); opacity: .75; }
 .files { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 160px; }
 .files li.f {
@@ -296,11 +296,11 @@ body.resizing { cursor: col-resize; user-select: none; }
 .files .mk { font-weight: 700; }
 .files li.same .nm { color: var(--ink-3); }
 .files li.dir .nm { font-weight: 600; }
-.files li.added .mk, .files li.added .nm { color: var(--accent); }
+.files li.added .mk, .files li.added .nm { color: var(--good); }
 .files li.modified .mk { color: var(--serious); }
 .files li.deleted { cursor: default; }
-.files li.deleted .mk { color: var(--ink-3); }
-.files li.deleted .nm { color: var(--ink-3); text-decoration: line-through; }
+.files li.deleted .mk { color: var(--critical); }
+.files li.deleted .nm { color: var(--critical); text-decoration: line-through; }
 .log.prompt { flex: none; max-height: 40vh; min-height: 0; white-space: pre-wrap; margin-bottom: 14px; }
 
 /* ── tooltip ─────────────────────────────────────────────── */
