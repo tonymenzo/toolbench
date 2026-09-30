@@ -23,6 +23,11 @@ const ui = {
   view: "matrix",   // "matrix" | "summary"
   trial: null,      // trial shown in the inspector
   follow: true,     // inspector tracks the newest active trial
+  itab: "overview", // inspector tab: "overview" | "prompts" | "files"
+  sandbox: false,   // sandbox view switched on (per browser)
+  inspected: null,  // trial the file view was last reset for
+  fdir: "",         // sandbox directory being listed
+  ffile: null,      // sandbox file being viewed
   summaryFor: null, // run id whose summary is loaded
   timer: null,
 };
@@ -60,6 +65,14 @@ const fmt = {
     return hr < 48 ? `${hr}h${String(m % 60).padStart(2, "0")}m` : `${Math.floor(hr / 24)}d`;
   },
   ago: (t) => (t ? fmt.dur(Date.now() / 1000 - t) : "—"),
+  bytes(n) {
+    if (n === null || n === undefined) return "";
+    if (n < 1024) return `${n} B`;
+    const u = ["KB", "MB", "GB"];
+    let v = n / 1024, i = 0;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+  },
 };
 
 const done = (c) => c.passed + c.failed + c.error + c.leak;
@@ -74,6 +87,9 @@ function readHash() {
   ui.view = p.get("view") === "summary" ? "summary" : "matrix";
   ui.trial = p.get("trial");
   ui.follow = !ui.trial;
+  const pane = p.get("pane");
+  if (pane === "prompts") ui.itab = "prompts";
+  if (pane === "sandbox") { ui.itab = "files"; ui.sandbox = true; }
 }
 
 function writeHash() {
@@ -81,6 +97,7 @@ function writeHash() {
   if (ui.run && ui.state?.mode === "campaign") p.set("run", ui.run);
   if (ui.view !== "matrix") p.set("view", ui.view);
   if (!ui.follow && ui.trial) p.set("trial", ui.trial);
+  if (ui.itab !== "overview") p.set("pane", ui.itab === "files" ? "sandbox" : ui.itab);
   history.replaceState(null, "", p.toString() ? `#${p}` : location.pathname);
 }
 
@@ -273,28 +290,120 @@ function pin(trialId) {
   render();
 }
 
+const MARK_GLYPH = { same: "", modified: "~", added: "+", deleted: "−" };
+
+async function trialApi(route, run, extra = {}) {
+  const q = new URLSearchParams({ run: run.id, trial: ui.trial, ...extra });
+  const res = await fetch(`/api/${route}?${q}`, { cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(res.status);
+  return res.json();
+}
+
 async function renderInspector(run) {
   const btn = $("follow");
   btn.className = `ghost follow ${ui.follow ? "on" : ""}`;
   btn.textContent = ui.follow ? "● following" : "follow live";
+  const sw = $("sandbox-toggle");
+  sw.setAttribute("aria-checked", String(ui.sandbox));
+  $("itab-files").hidden = !ui.sandbox;
+  if (!ui.sandbox && ui.itab === "files") ui.itab = "overview";
+  for (const b of document.querySelectorAll(".itabs button")) {
+    b.setAttribute("aria-selected", String(b.dataset.itab === ui.itab));
+  }
   $("trial-id").textContent = ui.trial || "—";
+  if (ui.trial !== ui.inspected) {  // a new trial: start its file view at the root
+    ui.inspected = ui.trial;
+    ui.fdir = "";
+    ui.ffile = null;
+  }
   const body = $("inspector");
   if (!ui.trial) {
     body.replaceChildren(h("p", { class: "empty" }, "No trial has started."));
     return;
   }
-  let d;
+  const key = `${ui.trial}|${ui.itab}|${ui.fdir}|${ui.ffile}`;
   try {
-    const res = await fetch(`/api/trial?run=${encodeURIComponent(run.id)}&trial=${encodeURIComponent(ui.trial)}`,
-      { cache: "no-store" });
-    if (res.status === 404) {
-      body.replaceChildren(h("p", { class: "empty" }, "Queued — not started."));
-      return;
+    if (ui.itab === "prompts") {
+      if (body.dataset.key !== key) await renderPrompts(run, body);  // prompts never change
+    } else if (ui.itab === "files") {
+      await renderFiles(run, body);
+    } else {
+      await renderOverview(run, body);
     }
-    if (!res.ok) throw new Error(res.status);
-    d = await res.json();
+    body.dataset.key = key;
   } catch (e) {
     body.replaceChildren(h("p", { class: "empty" }, `unavailable (${e.message})`));
+  }
+}
+
+async function renderPrompts(run, body) {
+  const p = await trialApi("prompts", run);
+  if (!p) {
+    body.replaceChildren(h("p", { class: "empty" },
+      "No prompts recorded (the trial has not started, or predates prompt recording)."));
+    return;
+  }
+  body.replaceChildren(
+    h("h3", { class: "label" }, "system"), h("pre", { class: "log prompt" }, p.system || "(empty)"),
+    h("h3", { class: "label" }, "user"), h("pre", { class: "log prompt" }, p.user || "(empty)"));
+}
+
+function crumbs(path, onDir) {
+  const parts = path ? path.split("/") : [];
+  const nav = h("div", { class: "crumbs" },
+    h("button", { type: "button", class: "ghost", onclick: () => onDir("") }, "sandbox"));
+  parts.forEach((part, i) => nav.append(h("span", { class: "sep" }, "/"),
+    h("button", { type: "button", class: "ghost", onclick: () => onDir(parts.slice(0, i + 1).join("/")) }, part)));
+  return nav;
+}
+
+async function renderFiles(run, body) {
+  const openDir = (dir) => { ui.fdir = dir; ui.ffile = null; render(); };
+  const scroller = body.querySelector(".scroll");
+  const keep = body.dataset.key === `${ui.trial}|${ui.itab}|${ui.fdir}|${ui.ffile}`;
+  const top = keep && scroller ? scroller.scrollTop : 0;
+
+  if (ui.ffile) {
+    const f = await trialApi("file", run, { path: ui.ffile });
+    if (!f) { ui.ffile = null; return renderFiles(run, body); }  // removed since
+    body.replaceChildren(crumbs(ui.ffile, openDir),
+      h("div", { class: "fmeta" }, `${fmt.bytes(f.size)}${f.truncated ? " · first 256 KB" : ""}`),
+      h("pre", { class: "log scroll" }, f.binary ? "(binary file)" : f.text));
+  } else {
+    const l = await trialApi("files", run, { path: ui.fdir });
+    if (!l) {
+      if (ui.fdir) { ui.fdir = ""; return renderFiles(run, body); }
+      body.replaceChildren(h("p", { class: "empty" }, "No workspace yet."));
+      return;
+    }
+    const source = {
+      sandbox: run.state === "running" ? "live sandbox" : "sandbox (kept)",
+      artifacts: "preserved artifacts · sandbox removed",
+      none: "no sandbox or artifacts on disk",
+    }[l.source];
+    const rows = l.entries.map((e) => h("li", {
+      class: `f ${e.mark || ""} ${e.type}`,
+      onclick: e.mark === "deleted" ? null
+        : () => (e.type === "dir" ? openDir(e.path) : ((ui.ffile = e.path), render())),
+    },
+      h("span", { class: "mk" }, MARK_GLYPH[e.mark] ?? ""),
+      h("span", { class: "nm" }, e.name + (e.type === "dir" ? "/" : "")),
+      h("span", { class: "sz" }, e.size === null ? "" : fmt.bytes(e.size))));
+    body.replaceChildren(crumbs(l.path, openDir),
+      h("div", { class: "fmeta" }, source,
+        l.has_init ? h("span", { class: "fkey" }, "+ added  ~ modified  − deleted") : " · no initial snapshot"),
+      h("ul", { class: "files scroll" }, rows.length ? rows : h("li", { class: "empty" }, "empty")),
+      l.truncated ? h("p", { class: "empty" }, "listing truncated") : null);
+  }
+  const s = body.querySelector(".scroll");
+  if (s) s.scrollTop = top;
+}
+
+async function renderOverview(run, body) {
+  const d = await trialApi("trial", run);
+  if (!d) {
+    body.replaceChildren(h("p", { class: "empty" }, "Queued — not started."));
     return;
   }
   if (d.trial_id !== ui.trial) return; // selection moved on while loading
@@ -450,6 +559,16 @@ $("picker").addEventListener("change", (e) => {
   render();
 });
 $("follow").addEventListener("click", () => { ui.follow = true; render(); });
+for (const b of document.querySelectorAll(".itabs button")) {
+  b.addEventListener("click", () => { ui.itab = b.dataset.itab; render(); });
+}
+$("sandbox-toggle").addEventListener("click", () => {
+  ui.sandbox = !ui.sandbox;
+  if (ui.sandbox) ui.itab = "files";
+  try { localStorage.setItem("toolbench-sandbox", ui.sandbox ? "1" : "0"); } catch { /* storage blocked */ }
+  render();
+});
+try { ui.sandbox = localStorage.getItem("toolbench-sandbox") === "1"; } catch { /* storage blocked */ }
 for (const b of document.querySelectorAll(".views button")) {
   b.addEventListener("click", () => { if (!b.disabled) { ui.view = b.dataset.view; render(); } });
 }

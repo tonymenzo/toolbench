@@ -9,6 +9,15 @@ Routes (all GET, all read-only):
   /api/summary?run=ID   a run's summary.txt as text/plain
   /api/trial?run=ID&trial=TID
                         a trial's row and console.log tail as JSON
+  /api/prompts?run=ID&trial=TID
+                        the trial's recorded system and user prompts
+  /api/files?run=ID&trial=TID&path=DIR
+                        one directory level of the trial's workspace, each
+                        entry marked against its initial snapshot
+  /api/file?run=ID&trial=TID&path=FILE
+                        one workspace file's text (capped)
+
+The workspace routes are only called while the page's sandbox view is on.
 
 Binds to 127.0.0.1 by default; on a remote host, reach it through an SSH
 port forward rather than binding a public interface.
@@ -25,6 +34,7 @@ from urllib.parse import parse_qs, urlparse
 from toolbench.dashboard.state import CampaignReader
 
 STATIC_DIR = Path(__file__).parent / "static"
+_TRIAL_ROUTES = ("/api/trial", "/api/prompts", "/api/files", "/api/file")
 _CONTENT_TYPES = {".html": "text/html; charset=utf-8",
                   ".css": "text/css; charset=utf-8",
                   ".js": "text/javascript; charset=utf-8"}
@@ -54,12 +64,18 @@ def make_handler(reader: CampaignReader, poll_s: float) -> type[BaseHTTPRequestH
                         self.send_error(HTTPStatus.NOT_FOUND, "no summary.txt for this run yet")
                     else:
                         self._send(text.encode(), "text/plain; charset=utf-8")
-                elif url.path == "/api/trial":
-                    detail = reader.trial_detail(query.get("run", ""), query.get("trial", ""))
-                    if detail is None:
-                        self.send_error(HTTPStatus.NOT_FOUND, "unknown trial")
+                elif url.path in _TRIAL_ROUTES:
+                    run, trial = query.get("run", ""), query.get("trial", "")
+                    result = {
+                        "/api/trial": lambda: reader.trial_detail(run, trial),
+                        "/api/prompts": lambda: reader.trial_prompts(run, trial),
+                        "/api/files": lambda: reader.list_files(run, trial, query.get("path", "")),
+                        "/api/file": lambda: reader.read_file(run, trial, query.get("path", "")),
+                    }[url.path]()
+                    if result is None:
+                        self.send_error(HTTPStatus.NOT_FOUND)
                     else:
-                        self._send_json(detail)
+                        self._send_json(result)
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND)
             except (BrokenPipeError, ConnectionResetError):

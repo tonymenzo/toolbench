@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   docked inspector that follows the active trial's live log, recent completions, and
   `summary.txt` once the run finalizes. Given a directory of runs, it adds a run
   picker. Standard library only; binds to `127.0.0.1`.
+- **Per-trial `prompts.json` and `sandbox_init.json`**, written just before the agent's
+  first turn: the exact system and user prompts, and a size/mtime listing of the sandbox
+  after the runtime's own setup. The dashboard shows the prompts, and an opt-in sandbox
+  browser marks files as added, modified or deleted relative to that listing.
 - **`plan.json`** in each run directory: the full trial list in execution order,
   written before the first trial. `resume` backfills it for older runs.
 - **`status.json`** in each run directory: run state (`running`, `finished`,

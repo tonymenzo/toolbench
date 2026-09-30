@@ -247,6 +247,26 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px 40px; }
 body.resizing { cursor: col-resize; user-select: none; }
 
 .inspector-head { display: flex; align-items: baseline; justify-content: space-between; }
+.controls { display: flex; align-items: baseline; gap: 14px; }
+
+/* On/off switch: a small track + knob before the label. */
+.switch {
+  display: inline-flex; align-items: center; gap: 7px; background: none; border: 0; padding: 2px 0;
+  cursor: pointer; color: var(--ink-3); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+}
+.switch::before {
+  content: ""; width: 20px; height: 10px; border-radius: 5px; border: 1px solid var(--rule-2);
+  background: radial-gradient(circle at 5px 50%, var(--ink-3) 3px, transparent 3.5px);
+  transition: background-position .15s;
+}
+.switch[aria-checked="true"] { color: var(--ink); }
+.switch[aria-checked="true"]::before {
+  border-color: var(--accent);
+  background: radial-gradient(circle at 15px 50%, var(--accent) 3px, transparent 3.5px);
+}
+.itabs { margin: 0 0 12px; }
+.itabs button[hidden] { display: none; }
+
 .follow { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
 .follow.on { color: var(--live); }
 .trial-id { font-weight: 600; margin: 4px 0 14px; word-break: break-all; }
@@ -270,6 +290,31 @@ body.resizing { cursor: col-resize; user-select: none; }
   font: 11.5px/1.5 var(--mono); color: var(--ink-2); white-space: pre; overflow: auto;
   flex: 1; min-height: 160px;
 }
+
+/* Sandbox view: breadcrumbs, source line, git-status style marks. */
+.crumbs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; }
+.crumbs .ghost { padding: 0; color: var(--ink-2); }
+.crumbs .ghost:hover { color: var(--accent); }
+.crumbs .sep { color: var(--rule-2); margin: 0 3px; }
+.fmeta { color: var(--ink-3); font-size: 11px; margin: 4px 0 8px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.fkey { white-space: pre; }
+.files { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; min-height: 160px; }
+.files li.f {
+  display: grid; grid-template-columns: 2ch minmax(0, 1fr) 9ch; gap: 8px; padding: 2px 4px;
+  border-top: 1px solid var(--rule); cursor: pointer;
+}
+.files li.f:hover { background: var(--raise); }
+.files .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files .sz { text-align: right; color: var(--ink-3); }
+.files .mk { font-weight: 700; }
+.files li.same .nm { color: var(--ink-3); }
+.files li.dir .nm { font-weight: 600; }
+.files li.added .mk, .files li.added .nm { color: var(--accent); }
+.files li.modified .mk { color: var(--serious); }
+.files li.deleted { cursor: default; }
+.files li.deleted .mk { color: var(--ink-3); }
+.files li.deleted .nm { color: var(--ink-3); text-decoration: line-through; }
+.log.prompt { flex: none; max-height: 40vh; min-height: 0; white-space: pre-wrap; margin-bottom: 14px; }
 
 /* ── tooltip ─────────────────────────────────────────────── */
 

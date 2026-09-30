@@ -137,6 +137,14 @@ interrupted. Next to the matrix, a docked inspector shows the newest active tria
 live `console.log`. Clicking any trial pins the inspector to it, with its result, stage
 checklist, and tool calls. Once the run finalizes, a summary view shows `summary.txt`.
 
+The inspector's **prompts** tab shows the exact system and user prompts the trial was given.
+Turning on the **sandbox** switch adds a live file browser over the trial's sandbox, marked
+like `git status` against its state when the agent started: `+` added, `~` modified,
+`−` deleted, and dimmed for files present from the start (seed and harness setup alike).
+Once a trial ends and its sandbox is cleaned up, the browser shows the preserved
+`artifacts/` instead. The switch is off by default, and while it is off nothing in the
+sandbox is read.
+
 Given a directory that holds several runs (a campaign, nested at any depth), the page adds
 a run picker; every `manifest.json` beneath the directory counts as a run.
 

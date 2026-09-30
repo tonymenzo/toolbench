@@ -62,6 +62,8 @@ runs/<timestamp>_<benchmark>_<model>_<label>/
     ├── trial.json          # full per-trial record (grade, tokens, cost, config)
     ├── transcript.jsonl.gz # every tool call (gzipped)
     ├── console.log         # this trial's styled log
+    ├── prompts.json        # the exact system + user prompts the agent was given
+    ├── sandbox_init.json   # the sandbox's files/dirs when the agent started
     ├── audit.txt           # always written: full trajectory + every tool input
     ├── audit.html          # only with --audit-html / loop.audit_html: styled twin of audit.txt
     ├── ux_feedback.md      # only with --ux-feedback: the trial's unscored UX critique

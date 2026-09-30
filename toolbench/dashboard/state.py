@@ -31,6 +31,7 @@ from types import SimpleNamespace
 
 from toolbench.core.failure_modes import EXCLUDED_FROM_METRICS, HARD_PROCESS_FAILURES
 from toolbench.core.run_status import STALE_AFTER_S, STATUS_FILE
+from toolbench.core.trial_start import PROMPTS_FILE, SANDBOX_INIT_FILE
 
 # Row failure modes that mean the trial never produced a measurement.
 _ERROR_MODES = HARD_PROCESS_FAILURES | EXCLUDED_FROM_METRICS | {"resolution_error"}
@@ -40,6 +41,10 @@ _LEAK_MODE = "INTEGRITY_LEAK"
 LOG_TAIL_BYTES = 64 * 1024
 # Finished trials listed in a run's "recent" feed.
 RECENT_TRIALS = 8
+# Largest file the sandbox viewer returns (a longer file is cut to this),
+# and the most entries one directory listing returns.
+FILE_VIEW_BYTES = 256 * 1024
+MAX_LISTING = 2000
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -118,6 +123,14 @@ def _ctime(path: Path) -> float | None:
     except OSError:
         return None
     return getattr(st, "st_birthtime", st.st_ctime)
+
+
+def _within(base: Path, rel: str) -> Path | None:
+    """`base / rel`, or None if it would resolve outside `base` (via `..` or
+    a symlink)."""
+    base = base.resolve()
+    target = (base / rel.strip("/")).resolve()
+    return target if target.is_relative_to(base) else None
 
 
 def _safe_name(name: str) -> bool:
@@ -242,7 +255,108 @@ class CampaignReader:
         return {"run_id": run_id, "trial_id": trial_id, "row": row,
                 "log": log, "log_truncated": truncated}
 
+    def trial_prompts(self, run_id: str, trial_id: str) -> dict | None:
+        """The trial's `prompts.json` ({"system", "user"}), if recorded."""
+        trial_dir = self._trial_dir(run_id, trial_id)
+        if trial_dir is None:
+            return None
+        return self._cache.load(trial_dir / PROMPTS_FILE, _parse_json)
+
+    def list_files(self, run_id: str, trial_id: str, rel: str = "") -> dict | None:
+        """One directory level of the trial's workspace, each entry marked
+        against `sandbox_init.json`:
+
+          same      present at the start and unchanged
+          modified  present at the start, size or mtime changed
+          added     not present at the start (produced by the agent)
+          deleted   present at the start, now gone
+
+        The source is the live sandbox while it exists (a running trial, or a
+        `--keep-sandbox` run), else the preserved `artifacts/`. Artifacts keep
+        only a subset, so `deleted` is not reported for them. Without an
+        initial snapshot (older runs) every mark is None.
+        """
+        located = self._workspace(run_id, trial_id)
+        if located is None:
+            return None
+        trial_dir, source, base = located
+        target = _within(base, rel) if base else None
+        if base is not None and (target is None or not target.is_dir()):
+            return None
+        init = self._cache.load(trial_dir / SANDBOX_INIT_FILE, _parse_json)
+        init_files = (init or {}).get("files") or {}
+        init_dirs = set((init or {}).get("dirs") or [])
+        prefix = f"{rel.strip('/')}/" if rel.strip("/") else ""
+
+        entries, seen = [], set()
+        children = sorted(target.iterdir(), key=lambda p: p.name) if target else []
+        for child in children[:MAX_LISTING]:
+            path = prefix + child.name
+            seen.add(child.name)
+            try:
+                st = child.lstat()
+            except OSError:
+                continue
+            is_dir = child.is_dir() and not child.is_symlink()
+            if init is None:
+                mark = None
+            elif is_dir:
+                mark = "same" if path in init_dirs else "added"
+            elif path in init_files:
+                size, mtime_ns = init_files[path]
+                mark = "same" if (st.st_size, st.st_mtime_ns) == (size, mtime_ns) else "modified"
+            else:
+                mark = "added"
+            entries.append({"name": child.name, "path": path,
+                            "type": "dir" if is_dir else "link" if child.is_symlink() else "file",
+                            "size": None if is_dir else st.st_size, "mark": mark})
+        if init is not None and source == "sandbox":
+            gone = {p[len(prefix):].split("/", 1)[0]: p for p in [*init_files, *init_dirs]
+                    if p.startswith(prefix)}
+            for name in sorted(set(gone) - seen):
+                path = prefix + name
+                entries.append({"name": name, "path": path,
+                                "type": "dir" if path in init_dirs else "file",
+                                "size": None, "mark": "deleted"})
+        entries.sort(key=lambda e: (e["type"] != "dir", e["name"]))
+        return {"source": source, "path": rel.strip("/"), "entries": entries,
+                "truncated": len(children) > MAX_LISTING,
+                "has_init": init is not None}
+
+    def read_file(self, run_id: str, trial_id: str, rel: str) -> dict | None:
+        """A workspace file's text (up to FILE_VIEW_BYTES), or `binary: True`."""
+        located = self._workspace(run_id, trial_id)
+        if located is None or located[2] is None:
+            return None
+        path = _within(located[2], rel)
+        if path is None or not path.is_file():
+            return None
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            data = fh.read(FILE_VIEW_BYTES)
+        binary = b"\0" in data[:8192]
+        return {"path": rel.strip("/"), "size": size, "binary": binary,
+                "truncated": size > FILE_VIEW_BYTES,
+                "text": None if binary else data.decode("utf-8", errors="replace")}
+
     # ── internals ───────────────────────────────────────────────────
+
+    def _trial_dir(self, run_id: str, trial_id: str) -> Path | None:
+        run_dir = self._resolve(run_id)
+        if run_dir is None or not _safe_name(trial_id):
+            return None
+        trial_dir = run_dir / "trials" / trial_id
+        return trial_dir if trial_dir.is_dir() else None
+
+    def _workspace(self, run_id: str, trial_id: str) -> tuple[Path, str, Path | None] | None:
+        """(trial dir, source label, base dir) for a trial's files."""
+        trial_dir = self._trial_dir(run_id, trial_id)
+        if trial_dir is None:
+            return None
+        for source, name in (("sandbox", "sandbox"), ("artifacts", "artifacts")):
+            if (trial_dir / name).is_dir():
+                return trial_dir, source, trial_dir / name
+        return trial_dir, "none", None
 
     def _resolve(self, run_id: str) -> Path | None:
         """Map a run id (path relative to the root) to its directory,

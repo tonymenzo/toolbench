@@ -212,3 +212,66 @@ def test_metered_run_is_not_subscription(tmp_path):
     _make_run(tmp_path)
     (r,) = CampaignReader(tmp_path).snapshot()["runs"]
     assert r["subscription"] is False and r["api_equivalent_usd"] is None
+
+
+def _trial_with_sandbox(tmp_path):
+    from toolbench.core.trial_start import record_trial_start
+    run, plan = _make_run(tmp_path)
+    tid = plan[0]["trial_id"]
+    tdir = run / "trials" / tid
+    sb = tdir / "sandbox"
+    (sb / "cards").mkdir(parents=True)
+    (sb / "cards" / "flux.cmnd").write_text("seed")
+    (sb / "notes.md").write_text("seed")
+    (sb / "old.txt").write_text("seed")
+    record_trial_start(tdir, sb, system_prompt="SYS", user_prompt="USER")
+    # The agent works: modifies one seed file, deletes another, adds files.
+    (sb / "notes.md").write_text("seed, then edited")
+    (sb / "old.txt").unlink()
+    (sb / "output").mkdir()
+    (sb / "output" / "answer.json").write_text("{}")
+    return run, tid, sb
+
+
+def test_list_files_marks_against_the_initial_snapshot(tmp_path):
+    run, tid, _ = _trial_with_sandbox(tmp_path)
+    reader = CampaignReader(tmp_path)
+    listing = reader.list_files("run_a", tid)
+    assert listing["source"] == "sandbox" and listing["has_init"]
+    marks = {e["name"]: e["mark"] for e in listing["entries"]}
+    assert marks == {"cards": "same", "output": "added", "notes.md": "modified",
+                     "old.txt": "deleted"}
+    sub = reader.list_files("run_a", tid, "output")
+    assert [(e["path"], e["mark"]) for e in sub["entries"]] == [("output/answer.json", "added")]
+
+
+def test_files_fall_back_to_artifacts_without_deleted_marks(tmp_path):
+    import shutil
+    run, tid, sb = _trial_with_sandbox(tmp_path)
+    art = sb.parent / "artifacts" / "output"
+    art.mkdir(parents=True)
+    shutil.copy2(sb / "output" / "answer.json", art / "answer.json")
+    shutil.rmtree(sb)
+    listing = CampaignReader(tmp_path).list_files("run_a", tid)
+    assert listing["source"] == "artifacts"
+    assert {e["name"]: e["mark"] for e in listing["entries"]} == {"output": "added"}
+
+
+def test_read_file_and_prompts(tmp_path):
+    run, tid, sb = _trial_with_sandbox(tmp_path)
+    (sb / "blob.bin").write_bytes(b"\x00\x01\x02")
+    reader = CampaignReader(tmp_path)
+    assert reader.read_file("run_a", tid, "notes.md")["text"] == "seed, then edited"
+    assert reader.read_file("run_a", tid, "blob.bin")["binary"] is True
+    assert reader.trial_prompts("run_a", tid) == {"system": "SYS", "user": "USER"}
+
+
+@pytest.mark.parametrize("rel", ["../trial.json", "../../../manifest.json", "/etc/passwd", "escape"])
+def test_workspace_refuses_paths_outside_the_sandbox(tmp_path, rel):
+    import os
+    run, tid, sb = _trial_with_sandbox(tmp_path)
+    (sb.parent / "trial.json").write_text("{}")
+    os.symlink(tmp_path, sb / "escape")
+    reader = CampaignReader(tmp_path)
+    assert reader.read_file("run_a", tid, rel) is None
+    assert reader.list_files("run_a", tid, rel) is None
