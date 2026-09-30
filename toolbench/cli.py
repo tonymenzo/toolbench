@@ -1159,9 +1159,22 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
             "cache_read_tokens": result.trajectory.tokens.get("cache_read", 0),
             "cache_creation_tokens": result.trajectory.tokens.get("cache_creation", 0),
             "cost_usd": round(result.cost_usd, 6) if result.cost_usd is not None else None,
+            # The runtime's own API-equivalent figure, when it reported one.
+            # Authoritative: the claude CLI's includes the 1h cache tier that a
+            # rate table does not model, which is a ~11% difference.
+            # getattr, not attribute access: the field is additive and optional,
+            # and stand-ins for TrialResult (tests, older callers) need not carry
+            # it -- the same convention the runner uses for `tool_calls`.
+            "estimated_api_equivalent_cost_usd": getattr(
+                result, "estimated_api_equivalent_cost_usd", None),
             "tool_calls": len(result.trajectory.tool_calls),
             "tool_errors": sum(1 for tc in result.trajectory.tool_calls
                                if not tc.ok),
+            # Which tools, not just how many. A tools arm's whole claim is that
+            # it reached its toolkit; a total cannot tell that apart from the
+            # same count of Bash calls reimplementing the work.
+            "tool_calls_by_name": result.trajectory.to_metadata_dict().get(
+                "tool_calls_by_name") or {},
             "resolved_model": result.trajectory.resolved_model,
             "failure_mode": result.grade.failure_mode,
             "attempts": result.attempts,
@@ -1261,17 +1274,9 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
     for row in all_trial_records:
         if _provider_by_harness.get(row.get("harness")) != "subscription":
             continue
-        estimate = subscription_api_equivalent_cost(
-            str(row.get("model", "")),
-            input_tokens=int(row.get("input_tokens", 0) or 0),
-            output_tokens=int(row.get("output_tokens", 0) or 0),
-            cache_read_tokens=int(row.get("cache_read_tokens", 0) or 0),
-            initial_input_tokens=int(row.get("initial_input_tokens", 0) or 0),
-        )
-        if estimate is not None:
-            row["estimated_api_equivalent_cost_usd"] = estimate["usd"]
-            _estimate_basis = {key: value for key, value in estimate.items()
-                               if key != "usd"}
+        basis = _fill_api_equivalent_estimate(row)
+        if basis is not None:
+            _estimate_basis = basis
 
     pass_threshold = (manifest.get("reach_weights") or {}).get("pass_threshold")
     summary = aggregate(all_trial_records, k=k,
@@ -1355,7 +1360,8 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
     }
     # Per-cell tool usage (per-tool call/error counts + adoption) and blind UX
     # ratings, read from each trial's transcript / trial.json (run_dir needed).
-    _augment_cells_with_trial_detail(summary, all_trial_records, run_dir)
+    _augment_cells_with_trial_detail(summary, all_trial_records, run_dir,
+                                     manifest)
     write_json(run_dir / "summary.json", summary)
 
     # Auto-render the headline plots. Best-effort: a plotting failure
@@ -1512,6 +1518,17 @@ def aggregate(trials: list[dict], k: int,
             ),
             "mean_wall_clock_s": round(mean(wallclocks), 2) if wallclocks else 0.0,
             "mean_tokens": tokens_mean,
+            "mean_tool_calls": (
+                round(mean([int(r.get("tool_calls", 0) or 0) for r in rows]), 1)
+                if rows else 0.0),
+            "mean_tool_errors": (
+                round(mean([int(r.get("tool_errors", 0) or 0) for r in rows]), 1)
+                if rows else 0.0),
+            # Summed across the cell's trials, commonest first. Summed rather
+            # than averaged: "ComputeDecayRate x6 over 3 trials" answers
+            # "did it use the toolkit" without the reader converting a mean
+            # back into whole calls.
+            "tool_calls_by_name": _sum_tool_calls(rows),
             "stages": _stages_breakdown(rows),
             "stage_display": _stages_continuous_breakdown(rows),
             "failure_modes": _count_failures(rows),
@@ -1732,8 +1749,78 @@ def _round_corr(corr: list[list[float | None]]) -> list[list[float | None]]:
     ]
 
 
-# Harness core + orchestration tools shared by every loadout; anything else a
-# trial calls is a domain (loadout) tool, so a call to one marks MCP adoption.
+def _fill_api_equivalent_estimate(row: dict) -> dict | None:
+    """Fill a row's API-equivalent cost from the rate table, IF it has none.
+
+    Precedence matters. A runtime that reports its own figure wins: the claude
+    CLI's includes the 1h cache-write tier (2x base) that the tables price at
+    the 5m tier (1.25x), a ~11% difference on a cache-heavy run. A table
+    estimate is the fallback for a runtime that reports nothing -- codex emits
+    no cost field at all -- and stays absent for a model no table lists, rather
+    than being reported as a confident zero.
+
+    Returns the basis record when it filled one, else None.
+    """
+    from toolbench.core.metrics import subscription_api_equivalent_cost
+    if row.get("estimated_api_equivalent_cost_usd") is not None:
+        return None
+    estimate = subscription_api_equivalent_cost(
+        str(row.get("model", "")),
+        input_tokens=int(row.get("input_tokens", 0) or 0),
+        output_tokens=int(row.get("output_tokens", 0) or 0),
+        cache_read_tokens=int(row.get("cache_read_tokens", 0) or 0),
+        initial_input_tokens=int(row.get("initial_input_tokens", 0) or 0),
+    )
+    if estimate is None:
+        return None
+    row["estimated_api_equivalent_cost_usd"] = estimate["usd"]
+    return {k: v for k, v in estimate.items() if k != "usd"}
+
+
+def _served_domain_tools(manifest: dict) -> dict[str, set[str]]:
+    """Per-loadout set of domain-tool names the arm actually served.
+
+    THE AUTHORITATIVE SET, replacing a naming heuristic. Adoption used to be
+    detected as `"__" in name` -- the MCP namespace prefix -- but the resolver
+    serves `heptapod__ComputeDecayRate` while the claude-code runtime records
+    the call unqualified as `ComputeDecayRate`. The test failed, `per_tool`
+    stayed empty, and the whole TOOLS section was suppressed: a run whose agent
+    called the tool twice reported `adoption 0/1`, which is the one number a
+    tools-vs-core campaign exists to report.
+
+    Reading it per LOADOUT also fixes something the string test could not
+    express: `core_only` serves no domain tools, so nothing it calls is one,
+    whatever the call is named.
+
+    Best-effort -- a manifest without `resolution` yields no sets, and callers
+    fall back to counting nothing rather than raising.
+    """
+    out: dict[str, set[str]] = {}
+    for entry in (manifest or {}).get("resolution") or []:
+        if not isinstance(entry, dict):
+            continue
+        names: set[str] = set()
+        for src in entry.get("sources") or []:
+            for tool in (src or {}).get("tools") or []:
+                names.add(str(tool).split("__")[-1].lower())
+        out[str(entry.get("loadout"))] = names
+    return out
+
+
+def _is_domain_call(raw_name: str, served: set[str]) -> bool:
+    """Whether this recorded tool call is one of the arm's served domain tools.
+
+    Compares on the unqualified, lowercased name so a runtime that keeps the
+    `toolkit__` prefix and one that strips it both match.
+    """
+    if not served:
+        return False
+    return str(raw_name or "").split("__")[-1].lower() in served
+
+
+# Harness core + orchestration tools shared by every loadout. Retained for the
+# script-adoption heuristic below; domain-tool detection no longer needs it,
+# since the served set says positively what counts.
 _CORE_TOOL_NAMES = frozenset(name.lower() for name in {
     "Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS",
     "TodoWrite", "NotebookEdit", "Task", "TaskCreate", "TaskUpdate",
@@ -1750,10 +1837,26 @@ _DOMAIN_TOOL_HINTS = ("MesonDecay", "DecayInVolume", "HarvestForwardFlux",
                       ".execute(", "_execute(")
 
 
-def _bash_runs_domain_tool(command: str) -> bool:
+def _bash_runs_domain_tool(command: str, served: set[str] | None = None) -> bool:
+    """Whether a Bash command drives the arm's domain tools as a library.
+
+    Some models never touch the MCP interface and import the toolkit instead,
+    which the call counts miss entirely. The hint list used to be hardcoded to
+    one benchmark's tools (MesonDecay, HarvestForwardFlux, PythiaFromRunCard),
+    so it could not detect any other -- a symbolic run importing the eda
+    toolkit scored zero script adoption by construction. The served set is now
+    the primary signal; the legacy hints stay as a fallback for an arm whose
+    resolution is unavailable.
+    """
     c = str(command or "")
     runs_py = ("python" in c.lower() or ".py" in c.lower())
-    return runs_py and any(h in c for h in _DOMAIN_TOOL_HINTS)
+    if not runs_py:
+        return False
+    if served:
+        low = c.lower()
+        if any(name in low for name in served):
+            return True
+    return any(h in c for h in _DOMAIN_TOOL_HINTS)
 
 
 def _parse_ux_rating(text: str):
@@ -1771,7 +1874,7 @@ def _parse_ux_rating(text: str):
 
 
 def _augment_cells_with_trial_detail(summary: dict, trials: list[dict],
-                                     run_dir) -> None:
+                                     run_dir, manifest: dict | None = None) -> None:
     """Attach per-cell `tool_usage` (per-tool call/error counts + adoption) and
     `ux_ratings` to each summary cell, read from every trial's
     transcript.jsonl.gz (the authoritative tool-call log — the row's tool_calls
@@ -1784,8 +1887,12 @@ def _augment_cells_with_trial_detail(summary: dict, trials: list[dict],
         by_cell.setdefault((t.get("model"), t.get("condition")), []).append(
             t.get("trial_id"))
 
+    served_by_loadout = _served_domain_tools(manifest or {})
     detail: dict[tuple, dict] = {}
     for key, tids in by_cell.items():
+        # key is (model, condition); `condition` is the loadout name, which is
+        # what `resolution` is keyed by.
+        served_here = served_by_loadout.get(str(key[1]), set())
         per_tool: Counter = Counter()
         per_tool_err: Counter = Counter()
         adopted_mcp = 0
@@ -1805,16 +1912,15 @@ def _augment_cells_with_trial_detail(summary: dict, trials: list[dict],
                             continue
                         raw_name = str(r.get("name") or "")
                         name = raw_name.split("__")[-1]
-                        is_mcp = "__" in raw_name
-                        if is_mcp:
+                        is_domain = _is_domain_call(raw_name, served_here)
+                        if is_domain:
                             per_tool[name] += 1
-                        if not r.get("ok", True):
-                            if is_mcp:
+                            if not r.get("ok", True):
                                 per_tool_err[name] += 1
-                        if is_mcp:
                             used_mcp = True
                         elif name.lower() == "bash" and _bash_runs_domain_tool(
-                                (r.get("args") or {}).get("command", "")):
+                                (r.get("args") or {}).get("command", ""),
+                                served_here):
                             used_script = True
                 except Exception:
                     pass
@@ -1906,6 +2012,15 @@ def _stages_continuous_breakdown(rows: list[dict]) -> dict:
             "distance_label": label,
         }
     return out
+
+
+def _sum_tool_calls(rows) -> dict:
+    """Per-tool call totals across a cell's trials, commonest first."""
+    out: dict[str, int] = {}
+    for r in rows:
+        for name, n in (r.get("tool_calls_by_name") or {}).items():
+            out[name] = out.get(name, 0) + int(n or 0)
+    return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def _count_failures(rows: list[dict]) -> dict[str, int]:

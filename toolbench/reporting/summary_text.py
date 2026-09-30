@@ -343,6 +343,24 @@ def _render_failures(failures: dict) -> list[str]:
     return out
 
 
+def opening_request_is_meaningful(tok: dict) -> bool:
+    """Whether `initial_input` is really the FIRST request, not the whole run.
+
+    The figure is only meaningful if the runtime reports usage per turn, so the
+    first event is genuinely the opening request. codex emits ONE cumulative
+    payload for a whole run, so its "first event" is the total -- a codex trial
+    rendered `108,097 opening request` beside `108,097 raw in`. Printing a total
+    under that label repeats the aliasing this replaced, so the line is dropped
+    instead. Context only grows, so a legitimate opening request is always
+    strictly smaller than the total.
+    """
+    initial = int(tok.get("initial_input", 0) or 0)
+    raw_in = (int(tok.get("input", 0) or 0)
+              + int(tok.get("cache_read", 0) or 0)
+              + int(tok.get("cache_creation", 0) or 0))
+    return 0 < initial < raw_in
+
+
 def _render_cost(cell: dict) -> list[str]:
     n = max(int(cell.get("n", 0)), 1)
     mean_cost = cell.get("mean_cost_usd")
@@ -362,6 +380,16 @@ def _render_cost(cell: dict) -> list[str]:
             f"      cost      ${total_estimated:.2f} total       "
             f"${mean_estimated:.2f} / trial  (estimated, subscription)"
         )
+    elif mean_cost == 0.0 and isinstance(mean_estimated, (int, float)):
+        # NOTHING WAS CHARGED, and that is a fact worth stating. Two bare zeros
+        # are indistinguishable from an unpopulated field -- and they sat
+        # directly above a non-zero API-equivalent figure, so a reader looking
+        # at one cell could not tell "this cost nothing" from "we do not know
+        # what this cost". The run header says SUBSCRIPTION; the cell has no
+        # harness to look that up, but a zero charge alongside a real
+        # token-derived equivalent is exactly the shape of a run that spent
+        # tokens without being billed for them.
+        cost_line = "      cost      $0.00 charged (no metered spend)"
     lines = [
         *_section_title("COST"),
         "",
@@ -371,15 +399,55 @@ def _render_cost(cell: dict) -> list[str]:
     ]
     tok = cell.get("mean_tokens") or {}
     if any(tok.get(k) for k in ("initial_input", "input", "output")):
-        # Per-trial means. "initial" is the starting context (system prompt +
-        # tools + task); input/output are cumulative over the agentic run.
+        # RAW TOTALS LEAD, because they need no arithmetic and are what a reader
+        # compares across arms. `input` on its own is the UNCACHED remainder,
+        # which near-total prompt caching drives to double digits -- reporting
+        # it alone read as a broken counter, and is how a 10x undercount hid.
+        raw_in = (int(tok.get("input", 0) or 0)
+                  + int(tok.get("cache_read", 0) or 0)
+                  + int(tok.get("cache_creation", 0) or 0))
+        out_tok = int(tok.get("output", 0) or 0)
         lines += [
-            f"      tokens    {tok.get('initial_input', 0):,} initial input / trial",
-            f"                {tok.get('input', 0):,} input  /  "
-            f"{tok.get('output', 0):,} output  (cumulative / trial)",
-            f"                {tok.get('cache_read', 0):,} cache read  /  "
-            f"{tok.get('cache_creation', 0):,} cache write  / trial",
+            f"      tokens    {raw_in:,} raw in  /  {out_tok:,} out"
+            f"          (per trial)",
+            # The ingredients, always: they are measurements, available whatever
+            # the model is, and they let a reader price the run with their own
+            # rates if ours are unknown.
+            f"                {tok.get('input', 0):,} uncached  +  "
+            f"{tok.get('cache_read', 0):,} cache read  +  "
+            f"{tok.get('cache_creation', 0):,} cache write",
         ]
+        # Rate-weighted input, in uncached-equivalent tokens: the figure
+        # proportional to cost. Absent, not guessed, when no provider lists the
+        # model -- which for a local vllm/ollama run is a fact, not a gap.
+        from toolbench.core.token_economics import (
+            effective_input_tokens, lookup_rates, no_cache_upper_bound,
+        )
+        model = str(cell.get("model") or cell.get("resolved_model") or "")
+        rates = lookup_rates(model)
+        authoritative = cell.get("mean_estimated_api_equivalent_cost_usd")
+        eff = effective_input_tokens(
+            tok, rates,
+            authoritative_cost_usd=(authoritative
+                                    if isinstance(authoritative, (int, float))
+                                    else None))
+        if eff is not None:
+            lines.append(f"                {eff:,.0f} effective in"
+                         f"          (uncached-equivalent)")
+        # The opening request: system prompt + tool schemas + task. The one
+        # token figure that differs by ARM for a structural reason, since
+        # serving a toolkit injects its schemas here -- so it prices the tools
+        # arm's fixed overhead before any work happens.
+        if opening_request_is_meaningful(tok):
+            lines.append(f"                {tok.get('initial_input', 0):,} opening request"
+                         f"     (system prompt + tool schemas + task)")
+        if rates is None and model:
+            lines.append(f"                no rates for {model!r}")
+        else:
+            upper = no_cache_upper_bound(tok, rates)
+            if upper is not None and isinstance(authoritative, (int, float)):
+                lines.append(f"                ${authoritative:.4f} API-equivalent"
+                             f"      ${upper:.4f} without caching")
     return lines
 
 

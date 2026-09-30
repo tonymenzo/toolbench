@@ -134,6 +134,13 @@ class TrialResult:
     nudges: int = 0              # presence-gated continue-nudges issued
     rate_limit_retries: int = 0  # RATE_LIMITED backoff resumes used
     transient_retries: int = 0   # TRANSIENT_API_ERROR backoff resumes used
+    # An API-equivalent cost the RUNTIME itself reported (the claude CLI prints
+    # one even under a subscription). Carried on the result so it reaches the
+    # trial ROW and therefore the cell aggregate: it previously went only into
+    # trial.json, while the row was filled by the rate-table loop alone, which
+    # returns None for every model that table lacks -- so the summary reported
+    # no API-equivalent for any subscription run.
+    estimated_api_equivalent_cost_usd: float | None = None
     # sandbox-seed files the agent deleted or rewrote, path -> reason.
     # Empty for a well-behaved trial; see Variant.verify_workspace.
     template_drift: dict[str, str] = field(default_factory=dict)
@@ -1127,6 +1134,7 @@ class TrialRunner:
             rate_limit_retries=rate_limit_retries,
             transient_retries=transient_retries,
             template_drift=template_drift,
+            estimated_api_equivalent_cost_usd=cli_api_equivalent_usd,
         )
 
     def _extract_usage(self, agent, trajectory: Trajectory,

@@ -82,9 +82,20 @@ class Trajectory:
         """Compact summary for trial.json — the full tool-call list
         lives in transcript.jsonl.gz, so we don't duplicate it here.
         """
+        # Per-tool counts, not just a total. For a tools arm the question the
+        # run exists to answer is WHICH tools were reached and how often -- a
+        # bare total cannot distinguish an arm that drove its domain toolkit
+        # from one that ignored it and hand-rolled the same work with Bash,
+        # and those are opposite results. Recoverable from
+        # transcript.jsonl.gz either way, but not at a glance.
+        by_tool: dict[str, int] = {}
+        for tc in self.tool_calls:
+            by_tool[tc.name] = by_tool.get(tc.name, 0) + 1
         return {
             "n_tool_calls": len(self.tool_calls),
             "n_tool_errors": sum(1 for tc in self.tool_calls if not tc.ok),
+            "tool_calls_by_name": dict(
+                sorted(by_tool.items(), key=lambda kv: (-kv[1], kv[0]))),
             "final_response": self.final_response,
             "tokens": self.tokens,
             "cost_usd": self.cost_usd,
