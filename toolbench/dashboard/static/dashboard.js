@@ -24,7 +24,6 @@ const ui = {
   trial: null,      // trial shown in the inspector
   follow: true,     // inspector tracks the newest active trial
   itab: "overview", // inspector tab: "overview" | "prompts" | "files"
-  sandbox: false,   // sandbox view switched on (per browser)
   inspected: null,  // trial the file view was last reset for
   fdir: "",         // sandbox directory being listed
   ffile: null,      // sandbox file being viewed
@@ -89,7 +88,7 @@ function readHash() {
   ui.follow = !ui.trial;
   const pane = p.get("pane");
   if (pane === "prompts") ui.itab = "prompts";
-  if (pane === "sandbox") { ui.itab = "files"; ui.sandbox = true; }
+  if (pane === "sandbox") ui.itab = "files";
 }
 
 function writeHash() {
@@ -304,10 +303,6 @@ async function renderInspector(run) {
   const btn = $("follow");
   btn.className = `ghost follow ${ui.follow ? "on" : ""}`;
   btn.textContent = ui.follow ? "● following" : "follow live";
-  const sw = $("sandbox-toggle");
-  sw.setAttribute("aria-checked", String(ui.sandbox));
-  $("itab-files").hidden = !ui.sandbox;
-  if (!ui.sandbox && ui.itab === "files") ui.itab = "overview";
   for (const b of document.querySelectorAll(".itabs button")) {
     b.setAttribute("aria-selected", String(b.dataset.itab === ui.itab));
   }
@@ -478,7 +473,7 @@ function render() {
   writeHash();
 
   renderHead(run);
-  for (const b of document.querySelectorAll(".views button")) {
+  for (const b of document.querySelectorAll("#views button")) {
     b.setAttribute("aria-selected", String(b.dataset.view === ui.view));
     if (b.dataset.view === "summary") {
       b.disabled = !run.has_summary;
@@ -562,14 +557,7 @@ $("follow").addEventListener("click", () => { ui.follow = true; render(); });
 for (const b of document.querySelectorAll(".itabs button")) {
   b.addEventListener("click", () => { ui.itab = b.dataset.itab; render(); });
 }
-$("sandbox-toggle").addEventListener("click", () => {
-  ui.sandbox = !ui.sandbox;
-  if (ui.sandbox) ui.itab = "files";
-  try { localStorage.setItem("toolbench-sandbox", ui.sandbox ? "1" : "0"); } catch { /* storage blocked */ }
-  render();
-});
-try { ui.sandbox = localStorage.getItem("toolbench-sandbox") === "1"; } catch { /* storage blocked */ }
-for (const b of document.querySelectorAll(".views button")) {
+for (const b of document.querySelectorAll("#views button")) {
   b.addEventListener("click", () => { if (!b.disabled) { ui.view = b.dataset.view; render(); } });
 }
 $("theme").addEventListener("click", () => {

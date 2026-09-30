@@ -34,7 +34,7 @@
 
     <div class="body">
       <section class="primary">
-        <nav class="views" role="tablist" aria-label="View">
+        <nav id="views" class="views" role="tablist" aria-label="View">
           <button type="button" role="tab" data-view="matrix" aria-selected="true">matrix</button>
           <button type="button" role="tab" data-view="summary" aria-selected="false">summary</button>
         </nav>
@@ -52,17 +52,13 @@
              aria-label="Resize trial panel" title="Drag to resize · double-click to reset"></div>
         <div class="inspector-head">
           <h2 class="label">trial</h2>
-          <div class="controls">
-            <button id="sandbox-toggle" class="switch" type="button" role="switch"
-                    aria-checked="false" title="Show the trial's sandbox files">sandbox</button>
-            <button id="follow" class="ghost follow" type="button"></button>
-          </div>
+          <button id="follow" class="ghost follow" type="button"></button>
         </div>
         <div id="trial-id" class="trial-id">—</div>
         <nav class="views itabs" role="tablist" aria-label="Trial view">
           <button type="button" role="tab" data-itab="overview" aria-selected="true">overview</button>
           <button type="button" role="tab" data-itab="prompts" aria-selected="false">prompts</button>
-          <button id="itab-files" type="button" role="tab" data-itab="files" aria-selected="false" hidden>sandbox</button>
+          <button type="button" role="tab" data-itab="files" aria-selected="false">sandbox</button>
         </nav>
         <div id="inspector"></div>
       </aside>

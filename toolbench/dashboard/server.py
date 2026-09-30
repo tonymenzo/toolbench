@@ -17,7 +17,7 @@ Routes (all GET, all read-only):
   /api/file?run=ID&trial=TID&path=FILE
                         one workspace file's text (capped)
 
-The workspace routes are only called while the page's sandbox view is on.
+The workspace routes are only called while the page's sandbox tab is open.
 
 Binds to 127.0.0.1 by default; on a remote host, reach it through an SSH
 port forward rather than binding a public interface.

@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   picker. Standard library only; binds to `127.0.0.1`.
 - **Per-trial `prompts.json` and `sandbox_init.json`**, written just before the agent's
   first turn: the exact system and user prompts, and a size/mtime listing of the sandbox
-  after the runtime's own setup. The dashboard shows the prompts, and an opt-in sandbox
+  after the runtime's own setup. The dashboard shows the prompts, and a sandbox
   browser marks files as added, modified or deleted relative to that listing.
 - **`plan.json`** in each run directory: the full trial list in execution order,
   written before the first trial. `resume` backfills it for older runs.

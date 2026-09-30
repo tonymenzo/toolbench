@@ -247,25 +247,7 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px 40px; }
 body.resizing { cursor: col-resize; user-select: none; }
 
 .inspector-head { display: flex; align-items: baseline; justify-content: space-between; }
-.controls { display: flex; align-items: baseline; gap: 14px; }
-
-/* On/off switch: a small track + knob before the label. */
-.switch {
-  display: inline-flex; align-items: center; gap: 7px; background: none; border: 0; padding: 2px 0;
-  cursor: pointer; color: var(--ink-3); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
-}
-.switch::before {
-  content: ""; width: 20px; height: 10px; border-radius: 5px; border: 1px solid var(--rule-2);
-  background: radial-gradient(circle at 5px 50%, var(--ink-3) 3px, transparent 3.5px);
-  transition: background-position .15s;
-}
-.switch[aria-checked="true"] { color: var(--ink); }
-.switch[aria-checked="true"]::before {
-  border-color: var(--accent);
-  background: radial-gradient(circle at 15px 50%, var(--accent) 3px, transparent 3.5px);
-}
 .itabs { margin: 0 0 12px; }
-.itabs button[hidden] { display: none; }
 
 .follow { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
 .follow.on { color: var(--live); }
