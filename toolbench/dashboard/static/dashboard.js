@@ -404,6 +404,45 @@ async function poll() {
 
 /* ── wiring ───────────────────────────────────────────────── */
 
+/* Drag the inspector's left edge to resize it; the width persists per
+   browser. Double-click restores the default. */
+function initSplitter() {
+  const body = document.querySelector(".body");
+  const handle = $("splitter");
+  const KEY = "toolbench-inspector-w";
+  const apply = (px) => body.style.setProperty("--inspector-w", `${px}px`);
+  try {
+    const saved = Number(localStorage.getItem(KEY));
+    if (saved) apply(saved);
+  } catch { /* storage blocked */ }
+
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("dragging");
+    document.body.classList.add("resizing");
+    const right = body.getBoundingClientRect().right;
+    const move = (ev) => {
+      const w = Math.round(right - ev.clientX);
+      apply(Math.max(360, Math.min(w, body.clientWidth - 420)));
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.classList.remove("dragging");
+      document.body.classList.remove("resizing");
+      try {
+        localStorage.setItem(KEY, String(parseInt(body.style.getPropertyValue("--inspector-w"), 10)));
+      } catch { /* storage blocked */ }
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up, { once: true });
+  });
+  handle.addEventListener("dblclick", () => {
+    body.style.removeProperty("--inspector-w");
+    try { localStorage.removeItem(KEY); } catch { /* storage blocked */ }
+  });
+}
+
 $("picker").addEventListener("change", (e) => {
   ui.run = e.target.value;
   ui.follow = true;
@@ -426,6 +465,7 @@ try {
   if (saved) document.documentElement.dataset.theme = saved;
 } catch { /* storage blocked */ }
 window.addEventListener("scroll", untip, { passive: true });
+initSplitter();
 renderLegend();
 readHash();
 poll();

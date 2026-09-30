@@ -136,8 +136,11 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px 40px; }
 
 /* ── body: primary view + docked inspector ───────────────── */
 
+/* The inspector column is resizable (drag its left edge); --inspector-w is
+   set by the script and remembered per browser. */
 .body {
-  display: grid; grid-template-columns: minmax(0, 1fr) 460px;
+  --inspector-w: clamp(460px, 42vw, 820px);
+  display: grid; grid-template-columns: minmax(0, 1fr) var(--inspector-w);
   margin-top: 22px; border-top: 1px solid var(--rule);
 }
 .primary { padding: 14px 28px 0 0; min-width: 0; }
@@ -237,6 +240,12 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px 40px; }
 
 /* ── inspector ───────────────────────────────────────────── */
 
+.splitter {
+  position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2;
+}
+.splitter:hover, .splitter.dragging { background: linear-gradient(90deg, transparent 3px, var(--accent) 3px 5px, transparent 5px); }
+body.resizing { cursor: col-resize; user-select: none; }
+
 .inspector-head { display: flex; align-items: baseline; justify-content: space-between; }
 .follow { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
 .follow.on { color: var(--live); }
@@ -258,9 +267,7 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px 40px; }
 .tools .n { text-align: right; color: var(--ink-3); }
 .log {
   margin: 6px 0 0; padding: 10px 12px; background: var(--raise); border-radius: 2px;
-  font: 11.5px/1.5 var(--mono); color: var(--ink-2);
-  /* Wrap to the column: keep indentation, break long tokens (paths, ids). */
-  white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; overflow-y: auto;
+  font: 11.5px/1.5 var(--mono); color: var(--ink-2); white-space: pre; overflow: auto;
   flex: 1; min-height: 160px;
 }
 
@@ -277,6 +284,7 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px 40px; }
 @media (max-width: 1080px) {
   .body { grid-template-columns: minmax(0, 1fr); }
   .primary { padding-right: 0; }
+  .splitter { display: none; }
   .inspector { position: static; height: auto; border-left: 0; border-top: 1px solid var(--rule);
     padding: 14px 0 0; margin-top: 28px; }
   .log { max-height: 420px; }
