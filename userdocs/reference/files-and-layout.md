@@ -49,6 +49,8 @@ package:
 ```
 runs/<timestamp>_<benchmark>_<model>_<label>/
 ├── manifest.json           # full config, git SHA, pinned versions, the reproducibility record
+├── plan.json               # every trial the run will attempt, in execution order
+├── status.json             # liveness: running/finished/aborted/failed + a heartbeat
 ├── console.log             # the whole run's output, ANSI-stripped, live-tailable
 ├── trials.jsonl            # one compact line per trial
 ├── summary.json            # aggregated per-cell metrics
@@ -66,6 +68,11 @@ runs/<timestamp>_<benchmark>_<model>_<label>/
     └── artifacts/          # minimal evidence kept for `regrade`
         └── scripts/        # agent-authored code lifted from the transcript
 ```
+
+`plan.json` and `status.json` exist for monitoring (`toolbench dashboard`). Nothing that
+runs, grades, or aggregates trials reads them, and `toolbench export` does not include
+them. While a run is executing, `status.json` has `"state": "running"` and its `updated_at`
+is refreshed every 10 s; a heartbeat older than 60 s means the process is gone.
 
 A `trial_id` encodes its cell, e.g. `full_local__n000__seed1001` (and includes the
 harness/variant/model when those axes are swept).

@@ -53,6 +53,7 @@ from toolbench.core.metrics import (
     reach_bar_k, bootstrap_ci, mean, pass_at_k, pass_caret_k,
     pearson_corr_matrix, reach_at_k, reach_caret_k,
 )
+from toolbench.core.run_status import RunStatus
 from toolbench.core.runner import TrialRunner
 from toolbench.core.runtime import check_runtime_version, registered_runtimes
 from toolbench.core.store import (append_jsonl, read_json, read_jsonl,
@@ -586,7 +587,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Tee all run output into a single clean run-level console.log (in
     # addition to the per-trial logs), so the whole run is live-tailable
     # from one file without an ad-hoc redirect.
-    with _tee_stdout(run_dir / "console.log"):
+    with _tee_stdout(run_dir / "console.log"), RunStatus(run_dir) as status:
         print(f"Run: {run_id}")
         print(f"  Benchmark: {bench_name} | Harness(es): {h_ids} | Models: {models}")
         print(f"  Loadouts: {l_names} | Variants: {v_names} | "
@@ -674,6 +675,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"  note: --parallel {args.parallel} with --verbose: "
                   "per-tool-call lines from concurrent trials will interleave "
                   "on stdout (per-trial console.logs stay clean).")
+        _write_plan(run_dir, harnesses=harnesses, loadouts=loadouts,
+                    variants=variants, models=models, seeds=seeds)
         new_records, aborted_globally, abort_reason = _run_trial_loop(
             benchmark=benchmark, harnesses=harnesses, loadouts=loadouts,
             variants=variants, models=models, seeds=seeds, run_dir=run_dir,
@@ -685,6 +688,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                       all_trial_records=new_records, k=args.n,
                       stage_order=stage_order, stage_weights=stage_weights,
                       aborted=aborted_globally, abort_reason=abort_reason)
+        status.finish(aborted=aborted_globally, abort_reason=abort_reason)
     return 0
 
 
@@ -822,20 +826,26 @@ def cmd_resume(args: argparse.Namespace) -> int:
     print(f"  Budget cap: ${budget_cap} | prior spend: ${prior_spend:.4f} | "
           f"remaining: ${budget.remaining:.4f}")
 
-    new_records, aborted_globally, abort_reason = _run_trial_loop(
-        benchmark=benchmark, harnesses=harnesses, loadouts=loadouts,
-        variants=variants, models=models, seeds=seeds, run_dir=run_dir,
-        runner=runner, budget=budget, completed=completed,
-        dry_run=manifest.get("dry_run", False),
-        parallel=(args.parallel if args.parallel is not None
-                  else manifest.get("parallel", 1)),
-    )
+    if not (run_dir / "plan.json").exists():
+        _write_plan(run_dir, harnesses=harnesses, loadouts=loadouts,
+                    variants=variants, models=models, seeds=seeds)
 
-    _finalize_run(run_dir=run_dir, manifest=manifest, budget=budget,
-                  all_trial_records=existing + new_records,
-                  k=manifest["n_per_cell"],
-                  stage_order=stage_order, stage_weights=stage_weights,
-                  aborted=aborted_globally, abort_reason=abort_reason)
+    with RunStatus(run_dir) as status:
+        new_records, aborted_globally, abort_reason = _run_trial_loop(
+            benchmark=benchmark, harnesses=harnesses, loadouts=loadouts,
+            variants=variants, models=models, seeds=seeds, run_dir=run_dir,
+            runner=runner, budget=budget, completed=completed,
+            dry_run=manifest.get("dry_run", False),
+            parallel=(args.parallel if args.parallel is not None
+                      else manifest.get("parallel", 1)),
+        )
+
+        _finalize_run(run_dir=run_dir, manifest=manifest, budget=budget,
+                      all_trial_records=existing + new_records,
+                      k=manifest["n_per_cell"],
+                      stage_order=stage_order, stage_weights=stage_weights,
+                      aborted=aborted_globally, abort_reason=abort_reason)
+        status.finish(aborted=aborted_globally, abort_reason=abort_reason)
     return 0
 
 
@@ -1063,10 +1073,34 @@ def _build_work_items(*, harnesses, loadouts, variants, models, seeds,
                         trial_id = "__".join(parts) + f"__n{i:03d}__seed{seed}"
                         items.append({
                             "harness": h, "loadout": lo, "variant": v,
-                            "model": m, "seed": seed,
+                            "model": m, "seed": seed, "index": i,
                             "trial_id": trial_id, "condition": condition,
                         })
     return items
+
+
+def _plan_entries(items: list[dict]) -> list[dict]:
+    """Serialize `_build_work_items` output to plain JSON records, keeping
+    execution order. `index` is the seed index (the `nNNN` in the trial id)."""
+    return [{"trial_id": it["trial_id"], "condition": it["condition"],
+             "harness": it["harness"].id, "loadout": it["loadout"].name,
+             "variant": it["variant"].name, "model": it["model"],
+             "seed": it["seed"], "index": it["index"]}
+            for it in items]
+
+
+def _write_plan(run_dir: Path, *, harnesses, loadouts, variants, models,
+                seeds) -> None:
+    """Write `plan.json`: every trial the run will attempt, in execution order.
+
+    Monitoring reads it to show queued trials before they start; nothing that
+    runs or grades trials depends on it. Always enumerated from the full grid
+    (no `completed` filter), so a resume never narrows the recorded plan.
+    """
+    items = _build_work_items(harnesses=harnesses, loadouts=loadouts,
+                              variants=variants, models=models, seeds=seeds,
+                              completed=set())
+    write_json(run_dir / "plan.json", {"trials": _plan_entries(items)})
 
 
 def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
