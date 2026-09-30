@@ -127,8 +127,47 @@ Each cell block carries three sections the cell mean would otherwise hide:
 - **TOOLS** — `adoption N/n trials used domain tools`, split into `X via MCP, Y via script`,
   plus a per-tool call/error breakdown. The MCP-vs-script split is the tell for whether the
   agent actually **drove the served pipeline** or quietly hand-rolled its own scripts.
-- **token means** live in the COST section (`mean_tokens`): `initial input` (the starting
-  context), cumulative `input` / `output`, and `cache read` / `cache write`, all per trial.
+  A "domain tool" is one the arm's loadout actually **served**, read from
+  `manifest["resolution"]` — not inferred from the tool's name, since runtimes differ on
+  whether they keep the `toolkit__` namespace prefix. An arm that serves nothing (`core_only`)
+  therefore has no domain calls by construction, whatever it invokes.
+- **token means** live in the COST section (`mean_tokens`), all per trial:
+
+```console
+      tokens    778,277 raw in  /  33,473 out          (per trial)
+                     97 uncached  +  702,330 cache read  +  75,850 cache write
+                222,030 effective in          (uncached-equivalent)
+                 75,858 opening request     (system prompt + tool schemas + task)
+                $0.3894 API-equivalent      $0.9456 without caching
+```
+
+  - **`raw in` / `out`** — total tokens processed. `raw in` is the sum of the three
+    components on the next line; compare these across arms.
+  - **`uncached` / `cache read` / `cache write`** — the components of `raw in`. They bill
+    at different rates, so the split is load-bearing, and near-total prompt caching drives
+    `uncached` into double digits: a small number there is healthy, not a broken counter.
+    **Cached tokens are not free** — a cache *read* costs ~0.1x the base input rate and a
+    cache *write* ~1.25x (5m TTL) or ~2x (1h), i.e. *more* than an ordinary input token.
+  - **`effective in`** — `raw in` re-expressed in uncached-equivalent tokens, weighting each
+    component by its own rate. This is the input figure proportional to cost. Absent when no
+    provider lists the model (a local `vllm`/`ollama` run has no API price, which is a fact
+    rather than a gap); the line then reads `no rates for '<model>'` and the components above
+    still let you price it with your own rates.
+  - **`opening request`** — the first request's context: system prompt + tool schemas + task.
+    The one token figure that differs by **arm** for a structural reason, since serving a
+    toolkit injects its schemas here — so it prices a tools arm's fixed overhead before any
+    work happens. It is *not* a total, and it is the **smallest** request of the run, because
+    context only grows.
+  - **cost** — `API-equivalent` is what the same work would cost through the API;
+    `without caching` prices `raw in` at the base rate as an upper bound, so the gap between
+    them is what caching bought. A subscription run's real charge is `$0.00`, reported
+    separately in the `budget` line. Where a runtime reports its own figure (the `claude`
+    CLI does) that wins over a rate-table estimate, because it accounts for the 1h cache
+    tier a table does not model — a ~11% difference on a cache-heavy run.
+
+  Rates come from `orchestral.llm.<provider>.pricing_model`, not from a table in this repo,
+  so they stay current and cover dated snapshots (`claude-haiku-4-5-20251001` as well as
+  `claude-haiku-4-5`).
 
 ## Reading a sweep as an ablation
 

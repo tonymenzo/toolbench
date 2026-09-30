@@ -684,23 +684,52 @@ class ClaudeCodeAgent:
 
     def _accumulate_usage(self, result_data: dict) -> None:
         """Fold this turn's token usage from `claude`'s result event into
-        `self.token_usage`. The `usage.iterations` list carries per-message
-        counts (fresh `input_tokens` plus cached reads/writes); summing them
-        gives the tokens actually processed. The first iteration's total input
-        is recorded as `initial_input` (the starting context size)."""
+        `self.token_usage`.
+
+        THE TOP-LEVEL `usage` BLOCK IS THE AGGREGATE for the whole invocation,
+        and is what the cumulative counters must come from. `usage.iterations`
+        is NOT one entry per message: the CLI emits a single entry there
+        whatever the turn count, so summing it undercounts everything, and
+        worse as the session grows. Measured against claude-code 2.1.284:
+
+            turns=5   true in= 69,719  out= 834   iter-sum in=23,718  out= 90
+            turns=6   true in= 93,411  out=1,168   iter-sum in=23,975  out=136
+
+        i.e. input low by 2.9-3.9x and output by 8.6-9.3x. Because the error
+        scales with turn count it cannot be corrected after the fact, and it
+        differs BETWEEN ARMS of an ablation -- a tools arm that reaches its
+        answer in fewer turns was being charged a different systematic
+        discount from the core arm it is compared against, which is how a
+        token-efficiency claim gets silently inverted.
+
+        The old code summed `iterations` and fell back to `[u]` when the key
+        was absent. That fallback is why this went unnoticed: on a CLI build
+        that omitted `iterations` it read the aggregate and was correct, so
+        the same field meant the true total on some runs and a fraction of it
+        on others, with nothing to distinguish them.
+
+        `initial_input` still comes from the first iteration, which IS the
+        opening request (system prompt + tool schemas + task). Confirmed by
+        its stability across session lengths -- 23,718 at five turns and
+        23,975 at six, where a last-message reading would have grown.
+        """
         u = (result_data or {}).get("usage") or {}
-        its = u.get("iterations") or ([u] if u else [])
-        for it in its:
-            i_in = int(it.get("input_tokens", 0) or 0)
-            i_cr = int(it.get("cache_read_input_tokens", 0) or 0)
-            i_cc = int(it.get("cache_creation_input_tokens", 0) or 0)
-            self.token_usage["input"] += i_in
-            self.token_usage["cache_read"] += i_cr
-            self.token_usage["cache_creation"] += i_cc
-            self.token_usage["output"] += int(it.get("output_tokens", 0) or 0)
-            if not self._usage_seen:
-                self.token_usage["initial_input"] = i_in + i_cr + i_cc
-                self._usage_seen = True
+        if not u:
+            return
+        self.token_usage["input"] += int(u.get("input_tokens", 0) or 0)
+        self.token_usage["cache_read"] += int(
+            u.get("cache_read_input_tokens", 0) or 0)
+        self.token_usage["cache_creation"] += int(
+            u.get("cache_creation_input_tokens", 0) or 0)
+        self.token_usage["output"] += int(u.get("output_tokens", 0) or 0)
+        if not self._usage_seen:
+            first = (u.get("iterations") or [u])[0] or {}
+            self.token_usage["initial_input"] = (
+                int(first.get("input_tokens", 0) or 0)
+                + int(first.get("cache_read_input_tokens", 0) or 0)
+                + int(first.get("cache_creation_input_tokens", 0) or 0)
+            )
+            self._usage_seen = True
         cost = result_data.get("total_cost_usd")
         if cost is not None:
             self.token_usage["cost"] = (self.token_usage["cost"] or 0.0) + float(cost)

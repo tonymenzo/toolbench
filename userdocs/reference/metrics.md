@@ -162,3 +162,50 @@ Because the axes are orthogonal, the **delta** between two cells attributes a ca
 
 See [Reading results & scores](../guides/reading-results.md) for how to read these deltas
 off a real `summary.txt`.
+
+## Token and cost metrics
+
+Token counts are measurements taken from the runtime's own usage reporting, not estimates.
+Input arrives in three classes that bill at different rates, so **total input is the sum of
+`uncached + cache read + cache write`** — `initial_input` is *not* a total, and using it as
+one understates a long run several-fold.
+
+| Field (`mean_tokens`) | Meaning |
+|---|---|
+| `input` | uncached input — full rate |
+| `cache_read` | served from cache — ~0.1x the base input rate |
+| `cache_creation` | written to cache — ~1.25x (5m TTL) or ~2x (1h), i.e. *more* than base |
+| `output` | generated tokens |
+| `initial_input` | the **first** request's context (system prompt + tool schemas + task) |
+
+`initial_input` is the smallest request of a run, since context only grows. It is useful
+precisely because it differs by **arm**: serving a toolkit injects its schemas there, pricing
+the tools arm's fixed overhead before any work happens.
+
+**Effective input** re-expresses total input in uncached-equivalent tokens, weighting each
+class by its own rate — the input figure proportional to cost. Rates come from
+`orchestral.llm.<provider>.pricing_model`; a model no provider lists yields no effective-input
+or cost figure rather than a fabricated one.
+
+### Cost provenance
+
+Two sources, with a fixed precedence:
+
+1. **A figure the runtime reported.** The `claude` CLI prints an API-equivalent cost even
+   under a subscription. This wins, because it accounts for the 1h cache-write tier that the
+   rate tables price at the 5m tier — a ~11% difference on a cache-heavy run.
+2. **A rate-table estimate**, for a runtime that reports nothing (`codex` emits no cost
+   field). Absent for a model no table lists.
+
+A subscription run's *real* charge is `$0.00`; the API-equivalent is an explicitly
+counterfactual figure and never counts against `--max-cost-usd`.
+
+### Known approximation: long-context pricing
+
+Some providers price requests above a context threshold at a multiple of the base rate
+(gpt-5.5: 2x input, 1.5x output above 272K). Toolbench applies that multiplier when
+`initial_input` exceeds the threshold — but `initial_input` is the *first* request, and a run
+whose opening request sits below the threshold may still cross it on later turns. Per-request
+context is not retained, so the test is **conservative**: it under-applies long-context
+pricing rather than over-applying it. Treat an API-equivalent figure near such a threshold as
+a lower bound.
