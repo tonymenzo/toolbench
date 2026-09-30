@@ -2401,6 +2401,27 @@ def _export(run_id: str, out: str | None, include_transcripts: bool,
     return 0
 
 
+@cli.command("dashboard", short_help="Watch a campaign of runs live in the browser.")
+@click.argument("directory", required=False, default=None,
+                type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="Interface to bind. Keep the default and use an SSH port "
+                   "forward to view a remote campaign.")
+@click.option("--port", type=int, default=8765, show_default=True,
+              help="Port to serve on (0 picks a free one).")
+@click.option("--poll", "poll_s", type=float, default=3.0, show_default=True,
+              help="Seconds between browser refreshes.")
+def _dashboard(directory: Path | None, host: str, port: int, poll_s: float) -> int:
+    """Serve a read-only live view of every run under DIRECTORY (default:
+    ./runs): queued, running and finished trials per cell, spend, and each
+    run's summary once it finalizes. Any directory works as a campaign;
+    every manifest.json beneath it is treated as a run."""
+    from toolbench.dashboard import serve
+
+    serve(directory or _runs_root(), host=host, port=port, poll_s=poll_s)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Console-script entry (`toolbench` / `tbe`). Returns a process exit code."""
     try:

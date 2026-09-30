@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **`toolbench dashboard [DIR]`**: a read-only live view of a campaign in the browser.
+  Any directory is a campaign, and every `manifest.json` under it is a run. It shows a
+  trial grid per cell (queued, running, finished, errored, interrupted), running reach
+  and pass counts, spend against budget, an ETA, each trial's live log, and the run's
+  `summary.txt` once it finalizes. Standard library only; binds to `127.0.0.1`.
+- **`plan.json`** in each run directory: the full trial list in execution order,
+  written before the first trial. `resume` backfills it for older runs.
+- **`status.json`** in each run directory: run state (`running`, `finished`,
+  `aborted`, `failed`) plus a heartbeat every 10 s, so a killed run can be told
+  apart from a slow one. Nothing that runs or grades trials reads either file, and
+  `export` leaves both out.
+
 ## [0.8.2] — 2026-09-30
 
 Token, cost and tool-adoption reporting. No API change and nothing touching

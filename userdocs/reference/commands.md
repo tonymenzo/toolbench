@@ -12,6 +12,12 @@ is the scannable reference. `toolbench --help` groups the commands, and `toolben
 | `toolbench resume` | Resume an interrupted run, only the seeds that didn't finish.        |
 | `toolbench regrade`| Re-judge a finished run's preserved artifacts after a rubric change, or apply an LLM judge retroactively. |
 
+## Monitoring
+
+| Command               | Purpose                                                            |
+|-----------------------|--------------------------------------------------------------------|
+| `toolbench dashboard` | Watch every run under a directory live in the browser.             |
+
 ## Sharing results
 
 | Command             | Purpose                                                             |
@@ -109,6 +115,35 @@ can actually publish:
 `run.json` carries the run-level metadata. `schema_version` (currently `1.0`) is the
 compatibility contract: additive changes bump the minor, anything that moves or retypes an
 existing field bumps the major.
+
+## `toolbench dashboard`
+
+```bash
+toolbench dashboard [DIRECTORY]      # default: ./runs
+```
+
+| Flag     | Default     | Meaning                                                        |
+|----------|-------------|----------------------------------------------------------------|
+| `--host` | `127.0.0.1` | Interface to bind.                                             |
+| `--port` | `8765`      | Port to serve on (`0` picks a free one).                       |
+| `--poll` | `3`         | Seconds between browser refreshes.                             |
+
+Serves a read-only page for a *campaign*: any directory, where every `manifest.json`
+beneath it is a run, at any depth. For each run it shows a grid of trials per cell (queued,
+running, passed, not passed, errored, integrity-quarantined, or interrupted), the running
+mean reach and pass count per cell, spend against the budget cap, an ETA while the run is
+live, and the run's `summary.txt` once it finalizes. Clicking a trial opens its result,
+stage checklist, tool calls, and the tail of its `console.log`, which updates live while
+the trial runs.
+
+Whether a run is still alive comes from its `status.json` heartbeat. A run that stops
+heartbeating is shown as **stale** (its process has most likely exited) and its in-flight
+trials as interrupted; `toolbench resume` finishes them. Runs from before `status.json`
+existed show as finished once they have a summary, and otherwise as "no heartbeat".
+
+The server only reads the campaign and never writes to it. To watch a campaign on a
+remote machine, keep the default host and forward the port:
+`ssh -L 8765:localhost:8765 <host>`.
 
 ## Conventions
 
