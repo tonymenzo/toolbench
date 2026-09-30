@@ -192,3 +192,23 @@ def test_cli_target_defaults_to_latest_run_and_accepts_run_ids(tmp_path, monkeyp
     assert cli.main(["dashboard", str(tmp_path / "runs")]) == 0
     assert served == [newer, (tmp_path / "runs" / "older").resolve(), tmp_path / "runs"]
     assert cli.main(["dashboard", "missing"]) == 1
+
+
+def test_subscription_run_reports_zero_spend_and_an_api_equivalent_estimate(tmp_path):
+    run, plan = _make_run(tmp_path)
+    manifest = json.loads((run / "manifest.json").read_text())
+    manifest["harnesses"] = [{"id": "claude-code/default", "provider": {"name": "subscription"}}]
+    (run / "manifest.json").write_text(json.dumps(manifest))
+    (run / "trials.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        {**_row(plan[0], ok=True, score=1.0, cost=0.0), "estimated_api_equivalent_cost_usd": 0.25},
+        {**_row(plan[1], ok=True, score=1.0, cost=0.0), "estimated_api_equivalent_cost_usd": 0.5}]))
+    (r,) = CampaignReader(tmp_path).snapshot()["runs"]
+    assert r["subscription"] is True
+    assert r["spent_usd"] == 0.0
+    assert r["api_equivalent_usd"] == pytest.approx(0.75)
+
+
+def test_metered_run_is_not_subscription(tmp_path):
+    _make_run(tmp_path)
+    (r,) = CampaignReader(tmp_path).snapshot()["runs"]
+    assert r["subscription"] is False and r["api_equivalent_usd"] is None

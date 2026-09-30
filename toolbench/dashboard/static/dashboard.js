@@ -155,9 +155,18 @@ function renderHead(run) {
     fig("active", `${c.running}`, `/${run.parallel}`),
     fig("passed", `${c.passed}`, `/${scored}`),
     fig("reach", fmt.r(reach)),
-    fig("spend", fmt.usd(run.spent_usd), run.budget_usd !== null && run.budget_usd !== undefined
-      ? `/${fmt.usd(run.budget_usd)}` : null),
   ];
+  // Subscription runs: no metered spend, so no cap applies; the API-equivalent
+  // figure is an estimate, labelled as one (matching summary.txt).
+  if (run.subscription) {
+    figs.push(fig("spend", fmt.usd(0), " subscription"));
+    if (run.api_equivalent_usd !== null) {
+      figs.push(fig("api equiv. (est.)", `~${fmt.usd(run.api_equivalent_usd)}`));
+    }
+  } else {
+    figs.push(fig("spend", fmt.usd(run.spent_usd), run.budget_usd !== null && run.budget_usd !== undefined
+      ? `/${fmt.usd(run.budget_usd)}` : null));
+  }
   if (c.error) figs.push(fig("errors", `${c.error}`));
   if (run.state === "running") figs.push(fig("eta", run.eta_s !== null ? `~${fmt.dur(run.eta_s)}` : "—"));
   $("figures").replaceChildren(...figs);
@@ -302,7 +311,11 @@ async function renderInspector(run) {
       ["failure", r.failure_mode && r.failure_mode !== "NONE" ? r.failure_mode : null],
       ["model", r.resolved_model || r.model],
       ["wall", fmt.dur(r.wall_clock_s)],
-      ["cost", fmt.usd(r.cost_usd ?? r.estimated_api_equivalent_cost_usd)],
+      ...(run.subscription
+        ? [["cost", `${fmt.usd(0)} · subscription`],
+          ["api equiv.", r.estimated_api_equivalent_cost_usd !== null && r.estimated_api_equivalent_cost_usd !== undefined
+            ? `~${fmt.usd(r.estimated_api_equivalent_cost_usd)} (est.)` : null]]
+        : [["cost", fmt.usd(r.cost_usd)]]),
       ["tokens", `${(r.input_tokens || 0).toLocaleString()} in · ${(r.output_tokens || 0).toLocaleString()} out`],
       ["tool calls", `${r.tool_calls ?? 0}${r.tool_errors ? ` · ${r.tool_errors} err` : ""}`],
     ].filter(([, v]) => v !== null && v !== undefined);

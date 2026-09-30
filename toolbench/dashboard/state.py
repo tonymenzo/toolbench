@@ -331,6 +331,13 @@ class CampaignReader:
 
         finished_rows = [r for r in rows.values() if r.get("wall_clock_s")]
         spent = sum(float(r.get("cost_usd") or 0.0) for r in rows.values())
+        # A subscription harness draws no metered spend; what it would have
+        # cost on the API is an estimate carried per row (as in summary.txt).
+        subscription = any(
+            isinstance(h, dict) and (h.get("provider") or {}).get("name") == "subscription"
+            for h in manifest.get("harnesses") or [])
+        estimates = [float(r["estimated_api_equivalent_cost_usd"]) for r in rows.values()
+                     if isinstance(r.get("estimated_api_equivalent_cost_usd"), (int, float))]
         parallel = int(manifest.get("parallel") or 1)
         remaining = counts["queued"] + counts["running"]
         eta_s = None
@@ -351,6 +358,8 @@ class CampaignReader:
             "dry_run": bool(manifest.get("dry_run")),
             "budget_usd": manifest.get("max_cost_usd"),
             "spent_usd": round(spent, 4),
+            "subscription": subscription,
+            "api_equivalent_usd": round(sum(estimates), 4) if estimates else None,
             "eta_s": eta_s,
             "last_activity": last_activity,
             "has_summary": (run_dir / "summary.txt").is_file(),
