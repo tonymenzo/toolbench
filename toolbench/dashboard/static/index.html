@@ -27,8 +27,6 @@
   <main id="app">
     <section class="head" aria-label="Run">
       <div id="run-id" class="run-id"></div>
-      <dl id="figures" class="figures"></dl>
-      <div id="progress" class="progress" role="img"></div>
       <div id="notice" class="notice" hidden></div>
     </section>
 
@@ -64,6 +62,11 @@
       </aside>
     </div>
   </main>
+
+  <footer class="status" aria-label="Run figures">
+    <div id="progress" class="progress" role="img"></div>
+    <dl id="figures" class="figures"></dl>
+  </footer>
 
   <div id="tip" class="tip" role="tooltip" hidden></div>
   <script src="/static/dashboard.js"></script>

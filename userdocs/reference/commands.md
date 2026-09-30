@@ -129,9 +129,10 @@ toolbench dashboard <run-id | dir>   # a specific run, or a directory of runs
 | `--port` | `8765`      | Port to serve on (`0` picks a free one).                       |
 | `--poll` | `3`         | Seconds between browser refreshes.                             |
 
-Serves a read-only live view of one run. At the top are headline figures: trials done,
-active slots, passes, mean reach, spend against the budget cap, and an ETA while the run is
-live. Below them is the trial matrix: one row per cell, one square per seed index. A square
+Serves a read-only live view of one run. A status bar fixed along the bottom of the window
+carries the run's figures (trials done, active slots, passes, mean reach, spend against the
+budget cap, and an ETA while the run is live) with a progress line on its top edge. The page
+itself holds the trial matrix: one row per cell, one square per seed index. A square
 is queued, running, shaded by reach once finished, errored, integrity-quarantined, or
 interrupted. Next to the matrix, a docked inspector shows the newest active trial and its
 live `console.log`. Clicking any trial pins the inspector to it, with its result, stage
