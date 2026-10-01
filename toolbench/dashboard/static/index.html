@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>toolbench</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-left">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="wordmark">toolbench</span>
+      <span class="slash" aria-hidden="true">/</span>
+      <span id="bench" class="bench"></span>
+      <label id="picker-wrap" class="picker" hidden>
+        <span class="visually-hidden">Run</span>
+        <select id="picker"></select>
+      </label>
+    </div>
+    <div class="bar-right">
+      <span id="liveness" class="liveness"></span>
+      <button id="theme" class="ghost" type="button" aria-label="Toggle dark mode">◐</button>
+    </div>
+  </header>
+
+  <main id="app">
+    <section class="head" aria-label="Run">
+      <div id="run-id" class="run-id"></div>
+      <div id="notice" class="notice" hidden></div>
+    </section>
+
+    <div class="body">
+      <section class="primary">
+        <nav id="views" class="views" role="tablist" aria-label="View">
+          <button type="button" role="tab" data-view="matrix" aria-selected="true">matrix</button>
+          <button type="button" role="tab" data-view="summary" aria-selected="false">summary</button>
+        </nav>
+        <div id="view-matrix">
+          <div id="matrix" class="matrix"></div>
+          <div id="legend" class="legend" aria-label="Matrix legend"></div>
+          <h2 class="label recent-label">recent</h2>
+          <ol id="recent" class="recent"></ol>
+        </div>
+        <pre id="view-summary" class="summary" hidden></pre>
+      </section>
+
+      <aside class="inspector" aria-label="Trial">
+        <div id="splitter" class="splitter" role="separator" aria-orientation="vertical"
+             aria-label="Resize trial panel" title="Drag to resize · double-click to reset"></div>
+        <div class="inspector-head">
+          <h2 class="label">trial</h2>
+          <button id="follow" class="ghost follow" type="button"></button>
+        </div>
+        <div id="trial-id" class="trial-id">—</div>
+        <nav class="views itabs" role="tablist" aria-label="Trial view">
+          <button type="button" role="tab" data-itab="overview" aria-selected="true">overview</button>
+          <button type="button" role="tab" data-itab="prompts" aria-selected="false">prompts</button>
+          <button type="button" role="tab" data-itab="files" aria-selected="false">sandbox</button>
+        </nav>
+        <div id="inspector"></div>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="status" aria-label="Run figures">
+    <div id="progress" class="progress" role="img"></div>
+    <dl id="figures" class="figures"></dl>
+  </footer>
+
+  <div id="tip" class="tip" role="tooltip" hidden></div>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

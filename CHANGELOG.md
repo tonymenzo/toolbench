@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **`toolbench dashboard [TARGET]`**: a read-only live view of a run in the browser.
+  With no target it opens the most recently started run. It shows headline figures,
+  a trial matrix per cell (queued, running, reach-shaded, crashed, excluded, interrupted), a
+  docked inspector that follows the active trial's live log, recent completions, and
+  `summary.txt` once the run finalizes. Given a directory of runs, it adds a run
+  picker. Standard library only; binds to `127.0.0.1`.
+- **`run --dashboard` / `resume --dashboard`** serve that dashboard from the run's own
+  process while it executes and print its URL (`--dashboard-port`, default 8765; a free
+  port is used if it is taken). It stops when the run ends.
+- **Per-trial `prompts.json` and `sandbox_init.json`**, written just before the agent's
+  first turn: the exact system and user prompts, and a size/mtime listing of the sandbox
+  after the runtime's own setup. The dashboard shows the prompts, and a sandbox
+  browser marks files as added, modified or deleted relative to that listing.
+- **`plan.json`** in each run directory: the full trial list in execution order,
+  written before the first trial. `resume` backfills it for older runs.
+- **`status.json`** in each run directory: run state (`running`, `finished`,
+  `aborted`, `failed`) plus a heartbeat every 10 s, so a killed run can be told
+  apart from a slow one. Nothing that runs or grades trials reads either file, and
+  `export` leaves both out.
+
 ## [0.8.2] — 2026-09-30
 
 Token, cost and tool-adoption reporting. No API change and nothing touching

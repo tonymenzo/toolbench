@@ -52,6 +52,7 @@ you want a clean delta (see [Reading results & scores](reading-results.md)).
 | `--ux-feedback` / `--no-ux-feedback` | Add an extra, unscored post-trial turn where the agent critiques the served tools → `ux_feedback.md`. A tool-development aid. Default: harness's `loop.ux_feedback`. |
 | `--keep-sandbox`                  | Retain the full trial working tree for by-hand auditing instead of tearing it down. |
 | `--audit-html` / `--no-audit-html`| Also write an HTML twin of each trial's audit log. Default: harness's `loop.audit_html`. |
+| `--dashboard`                     | Serve the live dashboard while the run executes and print its URL. |
 
 Trials are scheduled *seed-major*: every cell runs its first trial before any cell runs
 its second. If the budget aborts the run mid-grid, every condition has (nearly) the same
@@ -136,6 +137,13 @@ Add `-v` / `--verbose` for a styled line per tool call (`▸` start, `✓`/`✗`
 per-trial header/footer with reach, failure mode, tokens, and cost. Everything printed is
 also teed to `runs/<id>/console.log`, so a backgrounded run stays live-tailable. Use
 `--run-label <name>` to suffix the run id.
+
+For a live view in the browser, add `--dashboard`. The run serves the
+[dashboard](../reference/commands.md#toolbench-dashboard) while it executes and prints its
+URL (port 8765, or a free one if that is taken; set it with `--dashboard-port`). It stops
+when the run ends; `toolbench dashboard <run-id>` reopens any run, finished or not, and
+`toolbench dashboard` alone opens the most recently started one. On a remote machine,
+forward the port: `ssh -L 8765:localhost:8765 <host>`.
 
 ## Resuming and re-grading
 

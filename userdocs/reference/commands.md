@@ -12,6 +12,12 @@ is the scannable reference. `toolbench --help` groups the commands, and `toolben
 | `toolbench resume` | Resume an interrupted run, only the seeds that didn't finish.        |
 | `toolbench regrade`| Re-judge a finished run's preserved artifacts after a rubric change, or apply an LLM judge retroactively. |
 
+## Monitoring
+
+| Command               | Purpose                                                            |
+|-----------------------|--------------------------------------------------------------------|
+| `toolbench dashboard` | Watch a run live in the browser.                                   |
+
 ## Sharing results
 
 | Command             | Purpose                                                             |
@@ -43,6 +49,8 @@ is the scannable reference. `toolbench --help` groups the commands, and `toolben
 | `--audit-html` / `--no-audit-html` | `loop.audit_html` | Also emit a styled HTML twin of each trial's audit log. The plain `audit.txt` is always written. |
 | `--parallel`                  | `1`                | Trials in flight at once (each trial is self-contained).       |
 | `--dry-run`                   | off                | Skip the LLM call, validate wiring, print the resolution preview. |
+| `--dashboard`                 | off                | Serve the live [dashboard](#toolbench-dashboard) while the run executes; prints its URL. |
+| `--dashboard-port`            | `8765`             | Port for `--dashboard`; a free one is used if it is taken.     |
 | `-v` / `--verbose`            | off                | A styled line per tool call. Honors `NO_COLOR`.               |
 | `--run-label`                 | `run` / `dryrun`   | Suffix for the run id.                                         |
 
@@ -59,6 +67,7 @@ toolbench run --benchmark examples/geometry --models claude-haiku-4-5 \
 | `--max-cost-usd` | Override the manifest's budget cap (e.g. widen it). Default: original. |
 | `--parallel`     | Trials in flight at once. Default: the original run's setting.         |
 | `-v`/`--verbose` | Styled per-tool-call output.                                           |
+| `--dashboard`    | Serve the live dashboard while the resume executes (`--dashboard-port`, default 8765). |
 
 The cap governs the run's **total** spend: what the completed trials already
 cost is pre-charged against it, so resuming with an unchanged cap only spends
@@ -109,6 +118,57 @@ can actually publish:
 `run.json` carries the run-level metadata. `schema_version` (currently `1.0`) is the
 compatibility contract: additive changes bump the minor, anything that moves or retypes an
 existing field bumps the major.
+
+## `toolbench dashboard`
+
+```bash
+toolbench dashboard                  # the most recently started run under ./runs
+toolbench dashboard <run-id | dir>   # a specific run, or a directory of runs
+```
+
+| Flag     | Default     | Meaning                                                        |
+|----------|-------------|----------------------------------------------------------------|
+| `--host` | `127.0.0.1` | Interface to bind.                                             |
+| `--port` | `8765`      | Port to serve on (`0` picks a free one).                       |
+| `--poll` | `3`         | Seconds between browser refreshes.                             |
+
+Serves a read-only live view of one run. A status bar fixed along the bottom of the window
+carries the run's figures (trials done, active slots, passes, mean reach, spend against the
+budget cap, and an ETA while the run is live) with a progress line on its top edge. The page
+itself holds the trial matrix: one row per cell, one square per seed index. A square
+is queued, running, shaded by reach once finished, crashed, excluded,
+integrity-quarantined, or interrupted. Next to the matrix, a docked inspector shows the newest active trial and its
+live `console.log`. Clicking any trial pins the inspector to it, with its result, stage
+checklist, and tool calls. Once the run finalizes, a summary view shows `summary.txt`.
+
+Cell reach and pass counts are scored as in `summary.txt`: a crashed or quarantined trial
+counts as 0, and only an excluded trial (a subscription session-limit stop, which `resume`
+re-runs) is left out. Integrity leaks are found by a scan that runs when the run finalizes,
+so a live run never shows them; a leaking trial appears as an ordinary result until then.
+
+The inspector's **prompts** tab shows the exact system and user prompts the trial was given.
+Its **sandbox** tab is a live, expandable tree of the trial's sandbox (click a folder to
+open it in place, a file to read it), marked
+like `git status` against its state when the agent started: `+` added, `~` modified,
+`−` deleted, and dimmed for files present from the start (seed and harness setup alike).
+Once a trial ends and its sandbox is cleaned up, the browser shows the preserved
+`artifacts/` instead. The sandbox is only read while that tab is open.
+When the harness collects agent feedback (`loop.ux_feedback`), a finished trial's tree is
+headed by an **agent feedback** entry: the blind rating given before the grade was
+revealed and the audit given after it (or the single critique, in ungraded mode).
+
+Given a directory that holds several runs (a campaign, nested at any depth), the page adds
+a run picker; every `manifest.json` beneath the directory counts as a run.
+
+Whether a run is still alive comes from its `status.json` heartbeat. A run that stops
+heartbeating is shown as **stale** (its process has most likely exited) and its in-flight
+trials as interrupted; `toolbench resume` finishes them. Runs from before `status.json`
+existed show as finished once they have a summary, and otherwise as "no heartbeat".
+
+To watch a run from the moment it starts, pass `--dashboard` to `run` or `resume` instead:
+the run serves this page itself while it executes and prints the URL. The server only reads
+the run and never writes to it. To watch a run on a remote machine,
+keep the default host and forward the port: `ssh -L 8765:localhost:8765 <host>`.
 
 ## Conventions
 
