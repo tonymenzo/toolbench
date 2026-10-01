@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **The MCP preflight could pass when the tools loadout had not resolved** (#42). With
+  resolution failed, it expected no tools, so "no tools missing" printed `MCP preflight
+  OK` while the manifest recorded the error, and the tools arm would have run without its
+  tools. A failed resolution, or one that recorded no toolbase tools, now fails the
+  preflight. The check also ran `toolbase serve` from the benchmark directory, while a
+  trial's server runs in its sandbox under `<cwd>/runs/`; it now starts from the run
+  directory, so it checks the `.toolbase/` the trials will actually find. Each check is
+  recorded in the manifest's `mcp_preflight` section, with the directory it ran from.
+
 ## [0.9.0] — 2026-09-30
 
 Watch a run live. A read-only browser dashboard for a run in progress, and an integrity
