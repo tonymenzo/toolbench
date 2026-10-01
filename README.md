@@ -106,7 +106,11 @@ trial's live log, its prompts and sandbox (files marked added / modified / delet
 the agent started), and the run's summary once it finalizes. The run's figures (progress,
 reach, spend, ETA) sit in a status bar along the bottom. For a run that has ended, or one
 started without the flag, use `toolbench dashboard [run-id | dir]`; given a directory of
-runs it adds a run picker. The server is read-only and binds to `127.0.0.1`; on a remote
+runs it adds a run picker.
+
+To run several benchmarks as one campaign, give each run the same `--campaign NAME`: they
+land together under `runs/campaigns/NAME/`, and `toolbench dashboard --campaign NAME` watches
+all of them, with a picker in the top bar to switch between runs. The server is read-only and binds to `127.0.0.1`; on a remote
 machine, forward the port (`ssh -L 8765:localhost:8765 <host>`).
 
 ## Also

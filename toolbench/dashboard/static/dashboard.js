@@ -142,17 +142,37 @@ const untip = () => { $("tip").hidden = true; };
 
 /* ── header + figures ─────────────────────────────────────── */
 
+// One picker entry per run: state glyph, benchmark, progress, state word.
+// Runs that share a benchmark are told apart by their start time.
+const STATE_GLYPH = { running: "●", finished: "■", aborted: "▲", stale: "▲", failed: "✕", unknown: "○" };
+
+function renderPicker(s) {
+  const shared = new Set(s.runs.map((r) => r.benchmark).filter((b, i, all) => all.indexOf(b) !== i));
+  const label = (r) => [
+    STATE_GLYPH[r.state] || "○",
+    (r.benchmark || r.name) + (shared.has(r.benchmark) && r.created_at ? ` (${r.created_at.replace("T", " ")})` : ""),
+    `${done(r.counts)}/${r.counts.planned}`,
+    RUN_LABEL[r.state] || r.state,
+  ].join("  ");
+  const options = s.runs.map((r) => [r.id, label(r)]);
+  const sel = $("picker");
+  // Rebuild only on change, so a poll never closes the list while it is open.
+  const sig = JSON.stringify([options, ui.run]);
+  if (sel.dataset.sig === sig) return;
+  sel.dataset.sig = sig;
+  sel.replaceChildren(...options.map(([id, text]) =>
+    h("option", { value: id, selected: id === ui.run, title: id }, text)));
+}
+
 function renderBar(s, run) {
-  $("bench").textContent = run?.benchmark || s.name;
-  document.title = `${run?.state === "running" ? "● " : ""}${run?.benchmark || s.name} · toolbench`;
+  // A campaign is named by its directory; a single run by its benchmark.
+  const title = s.mode === "campaign" ? s.name : run?.benchmark || s.name;
+  $("bench").textContent = title;
+  document.title = `${s.live_runs ? "● " : ""}${title} · toolbench`;
 
   const wrap = $("picker-wrap");
   wrap.hidden = s.mode !== "campaign";
-  if (s.mode === "campaign") {
-    const sel = $("picker");
-    sel.replaceChildren(...s.runs.map((r) => h("option", { value: r.id, selected: r.id === ui.run },
-      `${r.state === "running" ? "● " : "  "}${r.id}`)));
-  }
+  if (s.mode === "campaign") renderPicker(s);
 
   const meta = [];
   if (run?.state === "running") meta.push(`hb ${fmt.ago(run.heartbeat_at)}`);

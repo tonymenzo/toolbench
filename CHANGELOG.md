@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **`run --campaign NAME`** groups runs, typically one per benchmark, under
+  `runs/campaigns/NAME/`, and the manifest records the campaign. Runs resolve by nested id
+  (`--run-id campaigns/NAME/<id>`, printed at start), so `resume`, `regrade` and `export`
+  need nothing new. **`toolbench dashboard --campaign NAME`** watches the whole campaign:
+  the top-bar picker lists each run's benchmark, progress and state.
+
 ### Fixed
 
 - **The MCP preflight could pass when the tools loadout had not resolved** (#42). With

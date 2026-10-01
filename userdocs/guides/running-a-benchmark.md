@@ -145,6 +145,23 @@ when the run ends; `toolbench dashboard <run-id>` reopens any run, finished or n
 `toolbench dashboard` alone opens the most recently started one. On a remote machine,
 forward the port: `ssh -L 8765:localhost:8765 <host>`.
 
+## Campaigns
+
+A campaign is several runs that belong together, typically one per benchmark. Give each
+`toolbench run` the same `--campaign NAME` and they land under `runs/campaigns/NAME/`
+instead of loose in `runs/`. Each run's id then includes that prefix: `resume`, `regrade`
+and `export` take `--run-id campaigns/NAME/<run-id>`, which the run prints when it starts.
+Watch the whole campaign with `toolbench dashboard --campaign NAME`; the picker in the top
+bar lists every run with its benchmark, progress and state.
+
+```bash
+for b in benchmarks/symbolic/*/; do
+  toolbench run --benchmark "$b" --harness claude-code/default --loadouts core_only,tools_eda \
+      --n 5 --max-cost-usd 20 --campaign symbolic_2026-10
+done
+toolbench dashboard --campaign symbolic_2026-10     # in another terminal
+```
+
 ## Resuming and re-grading
 
 - **`toolbench resume --run-id <id>`** picks up an interrupted run. It re-reads the
