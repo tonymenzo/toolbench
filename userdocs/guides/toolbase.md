@@ -32,11 +32,12 @@ production.
 
     `toolbase serve` takes no project root: it finds `.toolbase/` by walking up from the
     trial sandbox, which lives under `<cwd>/runs/`. So launch CLI-runtime runs from the
-    project that holds `.toolbase/`; a `project_root:` on the source is not used on this
-    path. Before any trial, the run's **MCP preflight** starts the server from the run
-    directory and checks that it serves the tools resolution recorded; it aborts the run
-    if resolution failed or recorded no tools. The result is in the manifest's
-    `mcp_preflight` section.
+    project that holds `.toolbase/`. A `project_root:` on the source cannot be honoured on
+    this path, so a CLI-runtime run that sets one is refused. Before any trial, `run` and
+    `resume` print the toolbase project the trials will use and run the **MCP preflight**:
+    it starts the server from the run directory and checks that it serves the tools
+    resolution recorded, aborting if resolution failed or recorded no tools. Each check is
+    in the manifest's `mcp_preflight` section.
 
 ## Setup
 

@@ -30,8 +30,11 @@ A `claude_code` or `codex` run aborted before any trial because a tools loadout 
 have reached its tools. The line after `✗` says why. `resolution failed: … No loadout named
 '…'` usually means the run was launched from outside the project that holds `.toolbase/`:
 CLI runtimes find it by walking up from the run directory, so `cd` to that project and re-run.
-`resolution recorded no toolbase tools` means the loadout resolved but served nothing; check
-its bundles with `tb config`. The manifest's `mcp_preflight` section records each check and the
+The `toolbase project:` line just above says which project the trials will use (or that
+none was found). `resolution recorded no toolbase tools` means the loadout resolved but
+served nothing; check its bundles with `tb config`. `project_root … is not supported` means a
+loadout sets `project_root:`, which CLI runtimes cannot honour: remove it and launch from that
+project instead. The manifest's `mcp_preflight` section records each check and the
 directory it ran from.
 
 ## "the inline `toolsets:` spec is not wired yet"
