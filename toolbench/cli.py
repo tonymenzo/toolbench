@@ -626,42 +626,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         manifest["resolution"] = resolution_reports
         write_json(run_dir / "manifest.json", manifest)
 
-        # MCP preflight: for every MCP-serving harness x loadout that serves a
-        # toolbase loadout, actually start `toolbase serve` and complete a
-        # tools/list handshake BEFORE any trial. A loadout that resolves but
-        # serves no tools (mis-wired toolbase command, env churn) otherwise runs
-        # the entire "tools" arm silently tool-less and still grades it as valid.
-        # Hard-fail the run here instead; runs verbatim in dry-run too.
-        from toolbench.core.runtime import (
-            runtime_serves_toolbase_mcp, verify_toolbase_mcp,
-            _toolbase_loadout_for)
-        mcp_failures: list[str] = []
-        for h in harnesses:
-            if not runtime_serves_toolbase_mcp(h.runtime_name):
-                continue
-            for lo in loadouts:
-                tb_loadout, proj = _toolbase_loadout_for(lo)
-                if not tb_loadout:
-                    continue
-                expected = [t for r in resolution_reports
-                            if r.get("harness") == h.id and r.get("loadout") == lo.name
-                            for s in r.get("sources", [])
-                            if s.get("backend") == "toolbase"
-                            for t in s.get("tools", [])]
-                try:
-                    served = verify_toolbase_mcp(tb_loadout, cwd=(proj or bench_dir))
-                    missing = [t for t in expected if t not in served]
-                    if missing:
-                        mcp_failures.append(
-                            f"{h.id}/{lo.name} (toolbase loadout {tb_loadout}): server served "
-                            f"{len(served)} tools, missing {missing}")
-                    else:
-                        print(f"  MCP preflight OK: {h.id}/{lo.name} — "
-                              f"{len(served)} tools served ({tb_loadout})")
-                except Exception as e:
-                    mcp_failures.append(
-                        f"{h.id}/{lo.name} (toolbase loadout {tb_loadout}): "
-                        f"{type(e).__name__}: {e}")
+        # MCP preflight: every MCP-serving harness x toolbase loadout must
+        # actually serve its tools before any trial runs (see _mcp_preflight).
+        # Runs verbatim in dry-run too.
+        mcp_failures, manifest["mcp_preflight"] = _mcp_preflight(
+            harnesses, loadouts, resolution_reports, run_dir)
+        write_json(run_dir / "manifest.json", manifest)
         if mcp_failures:
             print("\n  MCP PREFLIGHT FAILED — aborting before any trial ran:")
             for f in mcp_failures:
@@ -1082,6 +1052,72 @@ def _build_work_items(*, harnesses, loadouts, variants, models, seeds,
                             "trial_id": trial_id, "condition": condition,
                         })
     return items
+
+
+def _mcp_preflight(harnesses, loadouts, resolution_reports: list[dict],
+                   run_dir: Path) -> tuple[list[str], list[dict]]:
+    """Verify, before any trial, that each MCP-serving harness x toolbase
+    loadout serves the tools its resolution recorded.
+
+    A tools arm that resolves but serves nothing (a mis-wired toolbase
+    command, env churn, a loadout the trials cannot find) would otherwise run
+    tool-less and still grade as a valid tools arm. Returns
+    `(failures, records)`: human-readable failures (non-empty aborts the run)
+    and one record per check for the manifest.
+
+    Two rules keep the guard from passing vacuously:
+
+    - A failed resolution, or one that recorded no toolbase tools, is itself
+      a failure: with nothing expected, "nothing missing" proves nothing.
+    - The server is started from the run directory, because that is where
+      trials serve from: a trial's `toolbase serve` runs in its sandbox
+      (`<run_dir>/trials/<id>/sandbox`) and finds `.toolbase/` by walking up
+      from there. The MCP runtimes do not pass a loadout's `project_root`.
+    """
+    from toolbench.core.runtime import (
+        _toolbase_loadout_for, runtime_serves_toolbase_mcp, verify_toolbase_mcp)
+
+    failures: list[str] = []
+    records: list[dict] = []
+    for h in harnesses:
+        if not runtime_serves_toolbase_mcp(h.runtime_name):
+            continue
+        for lo in loadouts:
+            tb_loadout, proj = _toolbase_loadout_for(lo)
+            if not tb_loadout:
+                continue
+            label = f"{h.id}/{lo.name} (toolbase loadout {tb_loadout})"
+            record = {"harness": h.id, "loadout": lo.name, "toolbase_loadout": tb_loadout,
+                      "cwd": str(run_dir), "ok": False, "served": None, "error": None}
+            records.append(record)
+            reports = [r for r in resolution_reports
+                       if r.get("harness") == h.id and r.get("loadout") == lo.name]
+            resolve_errors = [r["error"] for r in reports if r.get("error")]
+            expected = [t for r in reports for s in r.get("sources", [])
+                        if s.get("backend") == "toolbase" for t in s.get("tools", [])]
+            if resolve_errors:
+                record["error"] = f"resolution failed: {resolve_errors[0]}"
+            elif not expected:
+                record["error"] = ("resolution recorded no toolbase tools, so there is "
+                                   "nothing to verify the server against")
+            else:
+                try:
+                    served = verify_toolbase_mcp(tb_loadout, cwd=str(run_dir))
+                    record["served"] = len(served)
+                    missing = [t for t in expected if t not in served]
+                    if missing:
+                        record["error"] = f"server served {len(served)} tools, missing {missing}"
+                except Exception as e:
+                    record["error"] = f"{type(e).__name__}: {e}"
+            if record["error"] is None:
+                record["ok"] = True
+                print(f"  MCP preflight OK: {h.id}/{lo.name} — "
+                      f"{record['served']} tools served ({tb_loadout})")
+                continue
+            hint = (f"; note: `project_root: {proj}` is not used by MCP runtimes, which "
+                    "find .toolbase/ by walking up from the run directory" if proj else "")
+            failures.append(f"{label}: {record['error']}{hint}")
+    return failures, records
 
 
 def _live_dashboard(run_dir: Path, args):

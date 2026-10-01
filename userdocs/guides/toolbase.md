@@ -30,6 +30,14 @@ production.
     the coding-agent CLI, rather than importing tools into this process. The served
     toolkit still follows the loadout's `toolbase:` source; only the transport differs.
 
+    `toolbase serve` takes no project root: it finds `.toolbase/` by walking up from the
+    trial sandbox, which lives under `<cwd>/runs/`. So launch CLI-runtime runs from the
+    project that holds `.toolbase/`; a `project_root:` on the source is not used on this
+    path. Before any trial, the run's **MCP preflight** starts the server from the run
+    directory and checks that it serves the tools resolution recorded; it aborts the run
+    if resolution failed or recorded no tools. The result is in the manifest's
+    `mcp_preflight` section.
+
 ## Setup
 
 1. **Install a toolkit and activate it.** toolbench ships a small

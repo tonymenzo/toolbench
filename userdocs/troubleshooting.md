@@ -24,6 +24,16 @@ A loadout used an `mcp:` source but the `mcp` package isn't importable. Install 
 `pip install 'toolbench[mcp]'`. Connection failures (bad `command:`, unreachable `url:`,
 rejected auth) surface in the `--dry-run` resolution preview before any model is called.
 
+## "MCP PREFLIGHT FAILED"
+
+A `claude_code` or `codex` run aborted before any trial because a tools loadout would not
+have reached its tools. The line after `✗` says why. `resolution failed: … No loadout named
+'…'` usually means the run was launched from outside the project that holds `.toolbase/`:
+CLI runtimes find it by walking up from the run directory, so `cd` to that project and re-run.
+`resolution recorded no toolbase tools` means the loadout resolved but served nothing; check
+its bundles with `tb config`. The manifest's `mcp_preflight` section records each check and the
+directory it ran from.
+
 ## "the inline `toolsets:` spec is not wired yet"
 
 The `toolbase: { toolsets: { ... } }` form isn't implemented. Author a toolbase loadout and
