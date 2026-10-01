@@ -87,8 +87,27 @@ when it clears the rubric's pass criterion — every stage by default, or reach 
 | `toolbench run`    | Run a benchmark across the harness × loadout × variant × model grid. |
 | `toolbench resume` | Resume an interrupted run; run only the seeds not yet completed.      |
 | `toolbench regrade`| Re-judge a finished run's preserved artifacts after a rubric change.  |
+| `toolbench dashboard` | Watch a run live in the browser: trial matrix, logs, prompts, sandbox. |
 
 Run `toolbench --help` (or `tbe --help`) for the full reference.
+
+## Watching a run
+
+Add `--dashboard` to `run` or `resume` to serve a live view of the run while it executes;
+the URL is printed at the top of the run's output:
+
+```bash
+toolbench run --benchmark examples/geometry --model claude-haiku-4-5 \
+    --loadouts core_only,full_local --n 3 --max-cost-usd 0.50 --dashboard
+```
+
+The page shows a matrix of every trial per cell as it queues, runs and lands, the active
+trial's live log, its prompts and sandbox (files marked added / modified / deleted since
+the agent started), and the run's summary once it finalizes. The run's figures (progress,
+reach, spend, ETA) sit in a status bar along the bottom. For a run that has ended, or one
+started without the flag, use `toolbench dashboard [run-id | dir]`; given a directory of
+runs it adds a run picker. The server is read-only and binds to `127.0.0.1`; on a remote
+machine, forward the port (`ssh -L 8765:localhost:8765 <host>`).
 
 ## Also
 

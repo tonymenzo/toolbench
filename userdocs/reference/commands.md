@@ -49,6 +49,8 @@ is the scannable reference. `toolbench --help` groups the commands, and `toolben
 | `--audit-html` / `--no-audit-html` | `loop.audit_html` | Also emit a styled HTML twin of each trial's audit log. The plain `audit.txt` is always written. |
 | `--parallel`                  | `1`                | Trials in flight at once (each trial is self-contained).       |
 | `--dry-run`                   | off                | Skip the LLM call, validate wiring, print the resolution preview. |
+| `--dashboard`                 | off                | Serve the live [dashboard](#toolbench-dashboard) while the run executes; prints its URL. |
+| `--dashboard-port`            | `8765`             | Port for `--dashboard`; a free one is used if it is taken.     |
 | `-v` / `--verbose`            | off                | A styled line per tool call. Honors `NO_COLOR`.               |
 | `--run-label`                 | `run` / `dryrun`   | Suffix for the run id.                                         |
 
@@ -65,6 +67,7 @@ toolbench run --benchmark examples/geometry --models claude-haiku-4-5 \
 | `--max-cost-usd` | Override the manifest's budget cap (e.g. widen it). Default: original. |
 | `--parallel`     | Trials in flight at once. Default: the original run's setting.         |
 | `-v`/`--verbose` | Styled per-tool-call output.                                           |
+| `--dashboard`    | Serve the live dashboard while the resume executes (`--dashboard-port`, default 8765). |
 
 The cap governs the run's **total** spend: what the completed trials already
 cost is pre-charged against it, so resuming with an unchanged cap only spends
@@ -162,7 +165,9 @@ heartbeating is shown as **stale** (its process has most likely exited) and its 
 trials as interrupted; `toolbench resume` finishes them. Runs from before `status.json`
 existed show as finished once they have a summary, and otherwise as "no heartbeat".
 
-The server only reads the run and never writes to it. To watch a run on a remote machine,
+To watch a run from the moment it starts, pass `--dashboard` to `run` or `resume` instead:
+the run serves this page itself while it executes and prints the URL. The server only reads
+the run and never writes to it. To watch a run on a remote machine,
 keep the default host and forward the port: `ssh -L 8765:localhost:8765 <host>`.
 
 ## Conventions

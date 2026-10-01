@@ -302,3 +302,34 @@ def test_cell_stats_score_crashes_and_leaks_as_zero_like_the_summary(tmp_path):
     assert cell["n_scored"] == 3 and cell["n_passed"] == 1
     assert cell["mean_reach"] == pytest.approx(1 / 3, abs=1e-4)
     assert r["counts"]["crashed"] == 1 and r["counts"]["excluded"] == 1
+
+
+def test_background_server_serves_and_falls_back_to_a_free_port(tmp_path):
+    import socket
+    import urllib.request
+    from toolbench.dashboard.server import background
+
+    run, _ = _make_run(tmp_path)
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        taken = busy.getsockname()[1]
+        with background(run, port=taken) as url:
+            assert not url.endswith(f":{taken}/")
+            state = json.loads(urllib.request.urlopen(url + "api/state", timeout=5).read())
+            assert state["mode"] == "run"
+
+
+def test_run_with_dashboard_prints_its_url(tmp_path, capsys):
+    pytest.importorskip("orchestral")
+    import toolbench.cli as cli
+    orig = cli._OUTPUT_BASE
+    try:
+        cli._OUTPUT_BASE = tmp_path
+        assert cli.main(["run", "--benchmark", str(GEOMETRY_DIR), "--loadouts", "full_local",
+                         "--harness", "orchestral/anthropic", "--model", "stub", "--n", "1",
+                         "--max-cost-usd", "0", "--dry-run",
+                         "--dashboard", "--dashboard-port", "0"]) == 0
+    finally:
+        cli._OUTPUT_BASE = orig
+    assert "Dashboard: http://127.0.0.1:" in capsys.readouterr().out

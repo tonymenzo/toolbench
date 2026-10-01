@@ -23,11 +23,17 @@ The workspace routes are only called while the page's sandbox tab is open.
 
 Binds to 127.0.0.1 by default; on a remote host, reach it through an SSH
 port forward rather than binding a public interface.
+
+`serve` runs in the foreground (`toolbench dashboard`); `background` serves
+from a daemon thread for the duration of a `with` block (`run --dashboard`).
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import threading
+from collections.abc import Iterator
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -121,4 +127,25 @@ def serve(root: str | Path, *, host: str = "127.0.0.1", port: int = 8765,
     except KeyboardInterrupt:
         pass
     finally:
+        httpd.server_close()
+
+
+@contextlib.contextmanager
+def background(root: str | Path, *, host: str = "127.0.0.1", port: int = 8765,
+               poll_s: float = 3.0) -> Iterator[str]:
+    """Serve the dashboard from a daemon thread while the block runs; yields
+    its URL. If `port` is taken, a free port is used instead, so a busy port
+    never stops the caller (a benchmark run) from starting."""
+    handler = make_handler(CampaignReader(root), poll_s)
+    try:
+        httpd = ThreadingHTTPServer((host, port), handler)
+    except OSError:
+        httpd = ThreadingHTTPServer((host, 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, name="toolbench-dashboard",
+                              daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{httpd.server_address[1]}/"
+    finally:
+        httpd.shutdown()
         httpd.server_close()

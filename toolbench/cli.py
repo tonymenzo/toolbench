@@ -587,8 +587,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Tee all run output into a single clean run-level console.log (in
     # addition to the per-trial logs), so the whole run is live-tailable
     # from one file without an ad-hoc redirect.
-    with _tee_stdout(run_dir / "console.log"), RunStatus(run_dir) as status:
+    with (_tee_stdout(run_dir / "console.log"), RunStatus(run_dir) as status,
+          _live_dashboard(run_dir, args) as dashboard_url):
         print(f"Run: {run_id}")
+        if dashboard_url:
+            print(f"  Dashboard: {dashboard_url}  (live while this run executes)")
         print(f"  Benchmark: {bench_name} | Harness(es): {h_ids} | Models: {models}")
         print(f"  Loadouts: {l_names} | Variants: {v_names} | "
               f"n: {args.n} | budget: ${args.max_cost_usd}")
@@ -830,7 +833,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         _write_plan(run_dir, harnesses=harnesses, loadouts=loadouts,
                     variants=variants, models=models, seeds=seeds)
 
-    with RunStatus(run_dir) as status:
+    with RunStatus(run_dir) as status, _live_dashboard(run_dir, args) as dashboard_url:
+        if dashboard_url:
+            print(f"  Dashboard: {dashboard_url}  (live while this resume executes)")
         new_records, aborted_globally, abort_reason = _run_trial_loop(
             benchmark=benchmark, harnesses=harnesses, loadouts=loadouts,
             variants=variants, models=models, seeds=seeds, run_dir=run_dir,
@@ -1077,6 +1082,15 @@ def _build_work_items(*, harnesses, loadouts, variants, models, seeds,
                             "trial_id": trial_id, "condition": condition,
                         })
     return items
+
+
+def _live_dashboard(run_dir: Path, args):
+    """Context manager serving this run's dashboard while it executes, when
+    `--dashboard` was given; yields the URL, or None when it was not."""
+    if not getattr(args, "dashboard", False):
+        return contextlib.nullcontext()
+    from toolbench.dashboard.server import background
+    return background(run_dir, port=getattr(args, "dashboard_port", 8765))
 
 
 def _plan_entries(items: list[dict]) -> list[dict]:
@@ -2304,6 +2318,13 @@ def cli() -> None:
               help="Also emit a styled HTML twin of each trial's audit log "
                    "(the plain-text audit.txt is always written, headless-safe). "
                    "Default: from the harness loop.audit_html (off unless set).")
+@click.option("--dashboard", "dashboard", is_flag=True, default=False,
+              help="Serve the live dashboard for this run while it executes "
+                   "and print its URL. It stops when the run ends; use "
+                   "`toolbench dashboard <run-id>` to view the run afterwards.")
+@click.option("--dashboard-port", "dashboard_port", type=int, default=8765,
+              show_default=True,
+              help="Port for --dashboard (a free one is used if it is taken).")
 def _run(**kw) -> int:
     """Run a benchmark across the (harness × loadout × variant × model) grid."""
     return cmd_run(SimpleNamespace(**kw))
@@ -2322,6 +2343,13 @@ def _run(**kw) -> int:
                    "--parallel from manifest.json.")
 @click.option("-v", "--verbose", "verbose", is_flag=True, default=False,
               help="Print a stylish line per tool call.")
+@click.option("--dashboard", "dashboard", is_flag=True, default=False,
+              help="Serve the live dashboard for this run while it executes "
+                   "and print its URL. It stops when the run ends; use "
+                   "`toolbench dashboard <run-id>` to view the run afterwards.")
+@click.option("--dashboard-port", "dashboard_port", type=int, default=8765,
+              show_default=True,
+              help="Port for --dashboard (a free one is used if it is taken).")
 def _resume(**kw) -> int:
     """Reads the run dir's manifest + trials.jsonl, runs only the seeds that
     haven't completed yet, and re-aggregates summary.json/summary.txt."""
