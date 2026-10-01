@@ -633,12 +633,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             harnesses, loadouts, resolution_reports, run_dir)
         write_json(run_dir / "manifest.json", manifest)
         if mcp_failures:
-            print("\n  MCP PREFLIGHT FAILED — aborting before any trial ran:")
-            for f in mcp_failures:
-                print(f"    ✗ {f}")
-            print("  A `tools` loadout could not reach its tools. Check that "
-                  "`toolbase` is installed in this env and the loadout serves "
-                  "tools, then re-run.")
+            _print_preflight_failures(mcp_failures)
             return 2
 
         if args.dry_run:
@@ -750,6 +745,19 @@ def cmd_resume(args: argparse.Namespace) -> int:
               f"{len(existing)} completed trial(s) cost ${prior_spend:.4f}. "
               "Widen it with --max-cost-usd to resume.", file=sys.stderr)
         return 2
+    # The same MCP preflight as `run`: a resume from another directory, or
+    # after the environment drifted, would otherwise run tools arms tool-less.
+    # It checks against the resolution the run recorded at launch, and runs
+    # before anything on disk is rewritten, so a failure leaves the run as it was.
+    mcp_failures, mcp_records = _mcp_preflight(
+        harnesses, loadouts, manifest.get("resolution") or [], run_dir, phase="resume")
+    if mcp_records:
+        manifest["mcp_preflight"] = mcp_records
+        write_json(manifest_path, manifest)
+    if mcp_failures:
+        _print_preflight_failures(mcp_failures)
+        return 2
+
     # Budget gate passed: drop the retryable rows from the on-disk record
     # so the retried trials' fresh rows don't duplicate their (cell, seed)
     # keys in later aggregation.
@@ -1054,8 +1062,33 @@ def _build_work_items(*, harnesses, loadouts, variants, models, seeds,
     return items
 
 
+def _print_preflight_failures(failures: list[str]) -> None:
+    print("\n  MCP PREFLIGHT FAILED — aborting before any trial ran:")
+    for f in failures:
+        print(f"    ✗ {f}")
+    print("  A `tools` loadout could not reach its tools. Check that "
+          "`toolbase` is installed in this env and the loadout serves "
+          "tools, then re-run.")
+
+
+def _toolbase_project(start: Path) -> str | None:
+    """The toolbase project a `toolbase serve` started under `start` resolves
+    to, by toolbase's own lookup (it skips `~/.toolbase/`). None when there is
+    none above `start`, in which case toolbase uses its default project, and
+    when toolbase is not importable here."""
+    try:
+        from toolbase.envs import find_project_root
+    except Exception:
+        return None
+    try:
+        root = find_project_root(cwd=start)
+    except Exception:
+        return None
+    return str(root) if root else None
+
+
 def _mcp_preflight(harnesses, loadouts, resolution_reports: list[dict],
-                   run_dir: Path) -> tuple[list[str], list[dict]]:
+                   run_dir: Path, *, phase: str = "run") -> tuple[list[str], list[dict]]:
     """Verify, before any trial, that each MCP-serving harness x toolbase
     loadout serves the tools its resolution recorded.
 
@@ -1072,13 +1105,21 @@ def _mcp_preflight(harnesses, loadouts, resolution_reports: list[dict],
     - The server is started from the run directory, because that is where
       trials serve from: a trial's `toolbase serve` runs in its sandbox
       (`<run_dir>/trials/<id>/sandbox`) and finds `.toolbase/` by walking up
-      from there. The MCP runtimes do not pass a loadout's `project_root`.
+      from there.
+
+    A loadout that sets `project_root` is refused outright for these
+    runtimes: `toolbase serve` has no project-root option, so the trials
+    could not honour it, while in-process resolution would. The project the
+    trials will use is printed once and recorded with each check. `phase`
+    ("run" | "resume") is recorded with each check.
     """
     from toolbench.core.runtime import (
         _toolbase_loadout_for, runtime_serves_toolbase_mcp, verify_toolbase_mcp)
 
     failures: list[str] = []
     records: list[dict] = []
+    project: str | None = None
+    announced = False
     for h in harnesses:
         if not runtime_serves_toolbase_mcp(h.runtime_name):
             continue
@@ -1086,16 +1127,29 @@ def _mcp_preflight(harnesses, loadouts, resolution_reports: list[dict],
             tb_loadout, proj = _toolbase_loadout_for(lo)
             if not tb_loadout:
                 continue
+            if not announced:
+                project = _toolbase_project(run_dir)
+                print(f"  toolbase project: {project}" if project else
+                      f"  toolbase project: none above {run_dir}; toolbase will "
+                      "use its default project")
+                announced = True
             label = f"{h.id}/{lo.name} (toolbase loadout {tb_loadout})"
             record = {"harness": h.id, "loadout": lo.name, "toolbase_loadout": tb_loadout,
-                      "cwd": str(run_dir), "ok": False, "served": None, "error": None}
+                      "phase": phase, "cwd": str(run_dir), "toolbase_project": project,
+                      "ok": False, "served": None, "error": None}
             records.append(record)
             reports = [r for r in resolution_reports
                        if r.get("harness") == h.id and r.get("loadout") == lo.name]
             resolve_errors = [r["error"] for r in reports if r.get("error")]
             expected = [t for r in reports for s in r.get("sources", [])
                         if s.get("backend") == "toolbase" for t in s.get("tools", [])]
-            if resolve_errors:
+            if proj:
+                record["error"] = (
+                    f"`project_root: {proj}` is not supported by the {h.runtime_name} "
+                    "runtime: `toolbase serve` has no project-root option, so trials "
+                    "find .toolbase/ by walking up from the run directory. Remove "
+                    "project_root and launch from the project that holds .toolbase/")
+            elif resolve_errors:
                 record["error"] = f"resolution failed: {resolve_errors[0]}"
             elif not expected:
                 record["error"] = ("resolution recorded no toolbase tools, so there is "
@@ -1114,9 +1168,7 @@ def _mcp_preflight(harnesses, loadouts, resolution_reports: list[dict],
                 print(f"  MCP preflight OK: {h.id}/{lo.name} — "
                       f"{record['served']} tools served ({tb_loadout})")
                 continue
-            hint = (f"; note: `project_root: {proj}` is not used by MCP runtimes, which "
-                    "find .toolbase/ by walking up from the run directory" if proj else "")
-            failures.append(f"{label}: {record['error']}{hint}")
+            failures.append(f"{label}: {record['error']}")
     return failures, records
 
 

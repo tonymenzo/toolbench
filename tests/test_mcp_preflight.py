@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import toolbench.cli as cli
 import toolbench.core.runtime as runtime
 from toolbench.cli import _mcp_preflight
 
@@ -40,6 +41,7 @@ def served(monkeypatch):
         return fake_verify.result
     fake_verify.result = ["eda__a", "eda__b"]
     monkeypatch.setattr(runtime, "verify_toolbase_mcp", fake_verify)
+    monkeypatch.setattr(cli, "_toolbase_project", lambda start: "/proj")
     return SimpleNamespace(set=lambda r: setattr(fake_verify, "result", r), calls=calls)
 
 
@@ -64,7 +66,8 @@ def test_ok_serves_from_the_run_directory_and_records_it(tmp_path, served):
     assert failures == []
     assert served.calls == [str(tmp_path)]
     assert records == [{"harness": "claude-code/default", "loadout": "tools_eda",
-                        "toolbase_loadout": "symbolic-eda", "cwd": str(tmp_path),
+                        "toolbase_loadout": "symbolic-eda", "phase": "run",
+                        "cwd": str(tmp_path), "toolbase_project": "/proj",
                         "ok": True, "served": 2, "error": None}]
 
 
@@ -81,13 +84,21 @@ def test_server_error_fails(tmp_path, served):
     assert "RuntimeError: serve exited" in failures[0]
 
 
-def test_project_root_is_not_where_trials_serve_from(tmp_path, served):
-    elsewhere = tmp_path / "elsewhere"
-    served.set(RuntimeError("no loadout"))
-    failures, _ = _mcp_preflight([_harness()], [_loadout(project_root=str(elsewhere))],
-                                 [_report()], tmp_path / "run")
-    assert served.calls == [str(tmp_path / "run")]
-    assert "project_root" in failures[0] and "not used by MCP runtimes" in failures[0]
+def test_project_root_is_refused_for_mcp_runtimes(tmp_path, served):
+    # Resolution honours project_root but `toolbase serve` cannot, so the
+    # trials would serve a different project: refuse rather than diverge.
+    failures, records = _mcp_preflight(
+        [_harness()], [_loadout(project_root=str(tmp_path / "elsewhere"))],
+        [_report()], tmp_path / "run")
+    assert served.calls == []
+    assert "not supported by the claude_code runtime" in failures[0]
+    assert records[0]["ok"] is False
+
+
+def test_project_is_announced_once(tmp_path, served, capsys):
+    two = [_loadout(name="tools_eda"), _loadout(name="tools_eda")]
+    _mcp_preflight([_harness()], two, [_report()], tmp_path)
+    assert capsys.readouterr().out.count("toolbase project: /proj") == 1
 
 
 def test_in_process_runtimes_and_toolless_loadouts_are_skipped(tmp_path, served):
@@ -95,3 +106,35 @@ def test_in_process_runtimes_and_toolless_loadouts_are_skipped(tmp_path, served)
     failures, records = _mcp_preflight(
         [_harness("orchestral"), _harness()], [core], [], tmp_path)
     assert failures == [] and records == [] and served.calls == []
+
+
+def test_toolbase_project_skips_the_home_config_dir(tmp_path):
+    # toolbase's own lookup: a run under $HOME must not resolve to ~/.toolbase.
+    pytest.importorskip("toolbase.envs")
+    proj = tmp_path / "proj"
+    (proj / ".toolbase").mkdir(parents=True)
+    run = proj / "runs" / "r1"
+    run.mkdir(parents=True)
+    assert cli._toolbase_project(run) == str(proj.resolve())
+
+
+# ── resume runs the same preflight ──────────────────────────────────
+
+def test_resume_aborts_on_preflight_failure_and_leaves_the_run_untouched(tmp_path, monkeypatch):
+    from tests.test_resume import _resume_args, _row, _seed_run
+    monkeypatch.setattr(cli, "_OUTPUT_BASE", tmp_path)
+    run_id, run_dir = _seed_run(tmp_path, rows=[_row(1001, failure_mode="resolution_error")],
+                                max_cost_usd=1.0)
+    before = (run_dir / "trials.jsonl").read_text()
+    seen = {}
+
+    def fake(harnesses, loadouts, reports, rdir, *, phase):
+        seen.update(phase=phase, rdir=rdir)
+        return ["h/tools (toolbase loadout x): resolution failed"], [{"phase": phase, "ok": False}]
+    monkeypatch.setattr(cli, "_mcp_preflight", fake)
+    assert cli.cmd_resume(_resume_args(run_id)) == 2
+    assert seen == {"phase": "resume", "rdir": run_dir}
+    # Not even the retryable row was dropped: nothing on disk changed but the record.
+    assert (run_dir / "trials.jsonl").read_text() == before
+    manifest = __import__("json").loads((run_dir / "manifest.json").read_text())
+    assert manifest["mcp_preflight"] == [{"phase": "resume", "ok": False}]

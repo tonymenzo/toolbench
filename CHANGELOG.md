@@ -18,6 +18,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   trial's server runs in its sandbox under `<cwd>/runs/`; it now starts from the run
   directory, so it checks the `.toolbase/` the trials will actually find. Each check is
   recorded in the manifest's `mcp_preflight` section, with the directory it ran from.
+- **`resume` skipped the MCP preflight**, so a resume from another directory, or after
+  the environment drifted, could run tools arms without their tools. It now runs the same
+  check against the resolution the run recorded, before rewriting anything on disk.
+- **A loadout's `project_root` was silently ignored by the `claude_code` and `codex`
+  runtimes** while in-process resolution honoured it, so the two could serve different
+  projects. `toolbase serve` has no project-root option, so such a run is now refused
+  with an explanation. `run` and `resume` also print the toolbase project the trials will
+  use (by toolbase's own lookup), and record it with each preflight check.
 
 ## [0.9.0] — 2026-09-30
 
