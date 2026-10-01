@@ -171,3 +171,52 @@ class TestRunTrialLoop(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _LeakyRunner(_FakeRunner):
+    """Like _FakeRunner, but the trial for `leaky_seed` reads the answer key."""
+
+    def __init__(self, leaky_seed):
+        super().__init__()
+        self.leaky_seed = leaky_seed
+
+    def run_trial(self, **kw):
+        import gzip, json
+        tdir = kw["run_dir"] / "trials" / kw["trial_id"]
+        tdir.mkdir(parents=True, exist_ok=True)
+        cmd = "cat ../soln/truth.json" if kw["seed"] == self.leaky_seed else "ls"
+        with gzip.open(tdir / "transcript.jsonl.gz", "wt") as f:
+            f.write(json.dumps({"type": "tool_call", "name": "Bash",
+                                "args": {"command": cmd}}) + "\n")
+        return super().run_trial(**kw)
+
+
+class TestPerTrialIntegrity(unittest.TestCase):
+    def test_leak_is_quarantined_as_the_trial_lands_and_the_run_continues(self):
+        from toolbench.core.store import read_jsonl
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        run_dir = Path(tmp.name)
+        records, aborted, _ = _run_trial_loop(
+            benchmark=SimpleNamespace(name="b"), harnesses=[_h("h")],
+            loadouts=[_named("A")], variants=[_named("v")], models=["m"],
+            seeds=[1, 2, 3], run_dir=run_dir, runner=_LeakyRunner(leaky_seed=2),
+            budget=Budget(None), completed=set(), dry_run=True)
+        self.assertFalse(aborted)
+        self.assertEqual(len(records), 3)          # not stopped
+        on_disk = {r["seed"]: r for r in read_jsonl(run_dir / "trials.jsonl")}
+        self.assertEqual(on_disk[2]["failure_mode"], "INTEGRITY_LEAK")
+        self.assertEqual(on_disk[2]["score"], 0.0)
+        self.assertEqual(on_disk[2]["score_pre_integrity"], 1.0)
+        self.assertEqual(on_disk[1]["failure_mode"], "NONE")
+        self.assertEqual(on_disk[3]["failure_mode"], "NONE")
+
+
+class TestQuarantine(unittest.TestCase):
+    def test_idempotent_keeps_the_original_score(self):
+        from toolbench.cli import _quarantine
+        row = {"score": 0.8, "ok": True, "failure_mode": "NONE"}
+        hits = [{"tool": "Bash", "marker": "soln/", "where": "input", "snippet": "cat soln/x"}]
+        _quarantine(row, hits)
+        _quarantine(row, hits)   # the end-of-run scan applies it again
+        self.assertEqual((row["score"], row["score_pre_integrity"], row["ok"]), (0.0, 0.8, False))

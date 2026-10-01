@@ -78,3 +78,33 @@ class TestIntegrity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFileBodies(unittest.TestCase):
+    """Write/Edit bodies match only path-shaped markers: a bare mention is not
+    access, but a script that names the answer key's path is."""
+
+    def _scan(self, calls):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "t.jsonl.gz"
+            _transcript(p, calls)
+            return scan_transcript(p, sensitive_markers(_MANIFEST))
+
+    def test_bare_word_in_written_file_is_not_flagged(self):
+        self.assertEqual(self._scan([
+            ("Write", {"file_path": "analysis.py",
+                       "content": "ground_truth = fit(x)\n# compare with answer_key later"}),
+            ("Edit", {"file_path": "notes.md", "old_string": "a",
+                      "new_string": "the ground_truth estimate"}),
+        ]), [])
+
+    def test_path_in_written_script_is_flagged(self):
+        hits = self._scan([("Write", {"file_path": "peek.py",
+                                      "content": "open('../soln/truth.json').read()"})])
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["where"], "file body")
+
+    def test_bare_word_in_a_command_is_still_flagged(self):
+        hits = self._scan([("Bash", {"command": "ls ../ground_truth"})])
+        self.assertEqual(hits[0]["where"], "input")
+        self.assertEqual(hits[0]["marker"], "ground_truth")

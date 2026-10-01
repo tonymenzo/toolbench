@@ -1117,6 +1117,35 @@ def _write_plan(run_dir: Path, *, harnesses, loadouts, variants, models,
     write_json(run_dir / "plan.json", {"trials": _plan_entries(items)})
 
 
+def _quarantine(row: dict, hits: list[dict]) -> None:
+    """Mark a trial row as having reached the answer key: zero its score for
+    aggregation and record the evidence. The original score is kept as
+    `score_pre_integrity`; idempotent, so the per-trial check and the
+    end-of-run scan can both apply it."""
+    row["integrity_leak"] = True
+    row["integrity_evidence"] = hits[:5]
+    row.setdefault("score_pre_integrity", row.get("score"))
+    row["score"] = 0.0
+    row["ok"] = False
+    row["failure_mode"] = "INTEGRITY_LEAK"
+
+
+def _scan_trial(run_dir: Path, row: dict, markers: list[str]) -> list[dict]:
+    """Integrity-scan one finished trial's transcript. Never raises: a scan
+    failure must not cost the trial's row."""
+    from toolbench.core.integrity import scan_transcript
+    tid = row.get("trial_id")
+    path = run_dir / "trials" / str(tid) / "transcript.jsonl.gz"
+    if not (tid and markers and path.exists()):
+        return []
+    try:
+        return scan_transcript(path, markers)
+    except Exception as e:
+        print(f"warning: integrity scan of {tid} failed: {type(e).__name__}: {e}",
+              file=sys.stderr)
+        return []
+
+
 def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
                     run_dir, runner, budget, completed,
                     dry_run=False, parallel=1) -> tuple[list[dict], bool]:
@@ -1138,6 +1167,10 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
     items = _build_work_items(harnesses=harnesses, loadouts=loadouts,
                               variants=variants, models=models, seeds=seeds,
                               completed=completed)
+    from toolbench.core.integrity import sensitive_markers
+    resolved = getattr(benchmark, "resolved_config", None)
+    integrity_markers = sensitive_markers(
+        {"benchmark_config": resolved() if callable(resolved) else {}})
     new_records: list[dict] = []
     aborted = False
     abort_reason: str | None = None   # "budget" | "session_limit"
@@ -1247,6 +1280,17 @@ def _run_trial_loop(*, benchmark, harnesses, loadouts, variants, models, seeds,
                 continue
             if row is None:
                 continue   # skipped: launched after the abort
+            # Integrity, per trial: quarantine a trial that reached the answer
+            # key as soon as it lands, so a systematic leak (e.g. a sandbox
+            # that does not confine an arm) shows up after its first trial
+            # rather than at the end. The run is deliberately not stopped.
+            # _finalize_run re-scans every trial with the same rule.
+            hits = _scan_trial(run_dir, row, integrity_markers)
+            if hits:
+                _quarantine(row, hits)
+                print(f"  INTEGRITY: {row['trial_id']} reached the answer key "
+                      f"({hits[0]['tool']}: {hits[0]['marker']!r}); quarantined, "
+                      "run continues.")
             # Rows are recorded here (the submitting thread) only, so
             # trials.jsonl appends never interleave.
             new_records.append(row)
@@ -1297,12 +1341,7 @@ def _finalize_run(*, run_dir, manifest, budget, all_trial_records, k,
         for row in all_trial_records:
             tid = row.get("trial_id")
             if tid in integrity_flagged:
-                row["integrity_leak"] = True
-                row["integrity_evidence"] = integrity_flagged[tid][:5]
-                row.setdefault("score_pre_integrity", row.get("score"))
-                row["score"] = 0.0
-                row["ok"] = False
-                row["failure_mode"] = "INTEGRITY_LEAK"
+                _quarantine(row, integrity_flagged[tid])
         # Persist the flags to trials.jsonl so the quarantine is on the record.
         with open(run_dir / "trials.jsonl", "w") as fh:
             for row in all_trial_records:

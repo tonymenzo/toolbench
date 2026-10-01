@@ -116,8 +116,9 @@ overridable.
 toolbench passes the benchmark tree — which holds the ground-truth answer key — to the
 runtime as **protected paths**. When a CLI runtime's `sandbox` is enabled it deny-reads
 them (a Seatbelt `denyRead` for `claude_code`, a native Codex permission profile for
-`codex`), so a trial can't read the answer key. This pairs with the post-run integrity
-scan, which quarantines any trial whose tool-call inputs reached the answer key.
+`codex`), so a trial can't read the answer key. This pairs with the integrity scan, run
+as each trial finishes and again at finalize, which quarantines any trial whose tool-call
+inputs reached the answer key.
 
 ### Runtime version capture
 
