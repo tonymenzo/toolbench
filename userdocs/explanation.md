@@ -58,10 +58,14 @@ answer key itself.
 The `claude_code` runtime deliberately doesn't confine the agent's Bash to the sandbox, so a
 trial *could* `cat` the ground-truth answer key that lives outside it. Two things stop that
 from silently inflating a score. The CLI runtimes **deny-read** the ground-truth paths up
-front (`protected_paths`), and as a backstop a post-run scan reads each trial's tool-call
-*inputs* (Bash commands, file reads, greps, never tool results) for references to the answer
-key, markers like `truth.json`, `ground_truth`, `answer_key`, and the benchmark's own
-ground-truth directory. A flagged trial is scored **0**, marked `INTEGRITY_LEAK`, has its
+front (`protected_paths`), and as a backstop a scan reads each trial's tool-call *inputs*
+(Bash commands, file reads, greps, executed code, never tool results) for references to the
+answer key, markers like `truth.json`, `ground_truth`, `answer_key`, and the benchmark's own
+ground-truth directory. The body of a file the agent writes is checked only for path-shaped
+markers (`soln/`, `truth.json`), so a script that opens the answer key is caught but a
+variable named `ground_truth` is not. The scan runs as each trial finishes, so a systematic
+leak shows up after its first trial (the run is not stopped), and again over every trial when
+the run finalizes. A flagged trial is scored **0**, marked `INTEGRITY_LEAK`, has its
 original score preserved as `score_pre_integrity`, and is **excluded from the headline**. It
 is the enforcement behind "no oracle leakage": neither the grader nor the agent gets to peek.
 

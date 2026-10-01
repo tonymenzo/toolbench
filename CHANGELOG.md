@@ -30,6 +30,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   apart from a slow one. Nothing that runs or grades trials reads either file, and
   `export` leaves both out.
 
+### Changed
+
+- **The integrity scan runs as each trial finishes**, not only when the run finalizes. A
+  trial that reached the answer key is quarantined as its row is recorded, so a systematic
+  leak (e.g. an arm whose sandbox does not confine it) is visible after its first trial.
+  The run is not stopped. Finalize still re-scans every trial with the same rule.
+- **File bodies no longer trip the scan on bare words.** The text of a file the agent
+  writes or edits (`Write.content`, `Edit.old_string`/`new_string`) is matched only
+  against path-shaped markers, so a variable named `ground_truth` is not a leak while a
+  script opening `soln/truth.json` still is. Commands, paths and executed code are matched
+  as before. Each hit now records `where` it matched (`input` or `file body`). Re-scanning
+  the 596 transcripts in the hepbench-dev runs gives identical verdicts under both rules.
+
 ## [0.8.2] — 2026-09-30
 
 Token, cost and tool-adoption reporting. No API change and nothing touching
