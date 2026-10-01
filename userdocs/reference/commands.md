@@ -133,10 +133,15 @@ Serves a read-only live view of one run. A status bar fixed along the bottom of 
 carries the run's figures (trials done, active slots, passes, mean reach, spend against the
 budget cap, and an ETA while the run is live) with a progress line on its top edge. The page
 itself holds the trial matrix: one row per cell, one square per seed index. A square
-is queued, running, shaded by reach once finished, errored, integrity-quarantined, or
-interrupted. Next to the matrix, a docked inspector shows the newest active trial and its
+is queued, running, shaded by reach once finished, crashed, excluded,
+integrity-quarantined, or interrupted. Next to the matrix, a docked inspector shows the newest active trial and its
 live `console.log`. Clicking any trial pins the inspector to it, with its result, stage
 checklist, and tool calls. Once the run finalizes, a summary view shows `summary.txt`.
+
+Cell reach and pass counts are scored as in `summary.txt`: a crashed or quarantined trial
+counts as 0, and only an excluded trial (a subscription session-limit stop, which `resume`
+re-runs) is left out. Integrity leaks are found by a scan that runs when the run finalizes,
+so a live run never shows them; a leaking trial appears as an ordinary result until then.
 
 The inspector's **prompts** tab shows the exact system and user prompts the trial was given.
 Its **sandbox** tab is a live, expandable tree of the trial's sandbox (click a folder to

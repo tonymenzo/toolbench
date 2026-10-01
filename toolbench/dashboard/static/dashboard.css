@@ -134,7 +134,8 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
 .progress span { height: 100%; }
 .progress .passed      { background: var(--good); }
 .progress .failed      { background: var(--ink-3); }
-.progress .error       { background: var(--critical); }
+.progress .crashed     { background: var(--critical); }
+.progress .excluded    { background: var(--rule-2); }
 .progress .leak        { background: var(--warning); }
 .progress .running     { background: var(--live); animation: blink 1.4s ease-in-out infinite; }
 .progress .interrupted { background: repeating-linear-gradient(90deg, var(--ink-3) 0 2px, transparent 2px 4px); }
@@ -176,7 +177,7 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
 
 /* Set under the matrix as a caption: quieter than the data it explains. */
 .legend {
-  display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-3); font-size: 10.5px;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; color: var(--ink-3); font-size: 10.5px;
   padding-top: 8px; border-top: 1px solid var(--rule);
 }
 .legend > span { display: inline-flex; align-items: center; gap: 5px; }
@@ -221,7 +222,8 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
 }
 @keyframes sweep { 0% { transform: scaleX(0); } 60% { transform: scaleX(1); } 100% { transform: scaleX(1); opacity: 0; } }
 .sq.interrupted { background: repeating-linear-gradient(135deg, transparent 0 2px, var(--rule-2) 2px 3px); border-color: var(--rule-2); }
-.sq.error { background: var(--critical); color: #fff; }
+.sq.crashed { background: var(--critical); color: #fff; }
+.sq.excluded { background: var(--rule-2); color: var(--ink-2); }
 .sq.leak  { background: var(--warning); color: #0b0b0b; }
 .sq.r0 { background: var(--r0); color: var(--r-ink-lo); }
 .sq.r1 { background: var(--r1); color: var(--r-ink-lo); }
@@ -247,7 +249,8 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
 .tag { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
 .tag.passed { color: var(--good); }
 .tag.failed { color: var(--ink-3); }
-.tag.error  { color: var(--critical); }
+.tag.crashed { color: var(--critical); }
+.tag.excluded { color: var(--ink-3); }
 .tag.leak   { color: var(--warning); }
 .empty { color: var(--ink-3); padding: 6px 0; margin: 0; }
 

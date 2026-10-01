@@ -9,13 +9,16 @@
 
 const TRIAL_LABEL = {
   queued: "queued", running: "running", interrupted: "interrupted",
-  passed: "passed", failed: "not passed", error: "infra error", leak: "integrity leak",
+  passed: "passed", failed: "not passed", crashed: "crashed (scored 0)",
+  excluded: "excluded (not scored)", leak: "integrity leak (scored 0)",
 };
 const RUN_LABEL = {
   running: "live", finished: "finished", aborted: "aborted", failed: "failed",
   stale: "stale", unknown: "no heartbeat",
 };
-const PROGRESS_ORDER = ["passed", "failed", "error", "leak", "interrupted", "running"];
+const PROGRESS_ORDER = ["passed", "failed", "crashed", "leak", "excluded", "interrupted", "running"];
+// Finished trials that enter the metrics (summary.txt leaves out only "excluded").
+const SCORED = new Set(["passed", "failed", "crashed", "leak"]);
 
 const ui = {
   state: null,
@@ -74,7 +77,7 @@ const fmt = {
   },
 };
 
-const done = (c) => c.passed + c.failed + c.error + c.leak;
+const done = (c) => c.passed + c.failed + c.crashed + c.excluded + c.leak;
 const bin = (s) => ((Number(s) || 0) >= 1 ? 4 : Math.min(3, Math.floor((Number(s) || 0) * 4)));
 const short = (tid) => tid.replace(/__seed\d+$/, "");
 
@@ -107,7 +110,8 @@ function square(t, { live = true } = {}) {
   if (t.state === "passed" || t.state === "failed") {
     cls = `sq r${bin(t.score)}`;
     if (t.state === "passed") glyph = "✓";
-  } else if (t.state === "error") glyph = "!";
+  } else if (t.state === "crashed") glyph = "!";
+  else if (t.state === "excluded") glyph = "–";
   else if (t.state === "leak") glyph = "⚑";
   if (!live) return h("span", { class: cls, "aria-hidden": "true" }, glyph);
   if (t.trial_id === ui.trial) cls += " sel";
@@ -161,8 +165,8 @@ function renderBar(s, run) {
 function renderHead(run) {
   $("run-id").textContent = run.name;
   const c = run.counts;
-  const scored = c.passed + c.failed;
-  const scores = run.cells.flatMap((x) => x.trials).filter((t) => t.state === "passed" || t.state === "failed");
+  const scored = c.passed + c.failed + c.crashed + c.leak;
+  const scores = run.cells.flatMap((x) => x.trials).filter((t) => SCORED.has(t.state));
   const reach = scores.length ? scores.reduce((a, t) => a + (Number(t.score) || 0), 0) / scores.length : null;
   const fig = (label, value, sub) => h("div", {}, h("dt", {}, label),
     h("dd", {}, value, sub ? h("small", {}, sub) : null));
@@ -183,7 +187,8 @@ function renderHead(run) {
     figs.push(fig("spend", fmt.usd(run.spent_usd), run.budget_usd !== null && run.budget_usd !== undefined
       ? `/${fmt.usd(run.budget_usd)}` : null));
   }
-  if (c.error) figs.push(fig("errors", `${c.error}`));
+  if (c.crashed) figs.push(fig("crashed", `${c.crashed}`));
+  if (c.excluded) figs.push(fig("excluded", `${c.excluded}`));
   if (run.state === "running") figs.push(fig("eta", run.eta_s !== null ? `~${fmt.dur(run.eta_s)}` : "—"));
   $("figures").replaceChildren(...figs);
 
@@ -220,7 +225,8 @@ function renderLegend() {
     item(s("running"), "running"),
     item(s("queued"), "queued"),
     item(s("interrupted"), "interrupted"),
-    item(s("error"), "! infra error"),
+    item(s("crashed"), "! crashed"),
+    item(s("excluded"), "– excluded"),
     item(s("leak"), "⚑ leak"));
 }
 

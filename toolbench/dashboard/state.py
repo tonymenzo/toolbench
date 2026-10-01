@@ -33,9 +33,16 @@ from toolbench.core.failure_modes import EXCLUDED_FROM_METRICS, HARD_PROCESS_FAI
 from toolbench.core.run_status import STALE_AFTER_S, STATUS_FILE
 from toolbench.core.trial_start import PROMPTS_FILE, SANDBOX_INIT_FILE
 
-# Row failure modes that mean the trial never produced a measurement.
-_ERROR_MODES = HARD_PROCESS_FAILURES | EXCLUDED_FROM_METRICS | {"resolution_error"}
+# Finished-trial states, mirroring how `aggregate` scores rows:
+#   excluded  EXCLUDED_FROM_METRICS (a subscription quota stop): no
+#             measurement, out of the scored population; `resume` re-runs it.
+#   crashed   a hard process failure, or a trial that could not start
+#             (`resolution_error`). Scored as a 0, as in summary.txt.
+#   leak      quarantined by the integrity scan, which runs when the run
+#             finalizes; scored as a 0.
+_CRASH_MODES = (HARD_PROCESS_FAILURES - EXCLUDED_FROM_METRICS) | {"resolution_error"}
 _LEAK_MODE = "INTEGRITY_LEAK"
+_SCORED_STATES = ("passed", "failed", "crashed", "leak")
 
 # Bytes of a trial's console.log returned to the detail view.
 LOG_TAIL_BYTES = 64 * 1024
@@ -50,7 +57,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
 # Per-run tallies. A trial is in exactly one of the states after "planned".
 _COUNT_KEYS = ("planned", "queued", "running", "interrupted", "passed", "failed",
-               "error", "leak")
+               "crashed", "excluded", "leak")
 
 
 class _FileCache:
@@ -189,8 +196,10 @@ def _trial_state(row: dict | None, has_dir: bool, run_live: bool) -> str:
     mode = row.get("failure_mode") or ""
     if mode == _LEAK_MODE:
         return "leak"
-    if mode in _ERROR_MODES:
-        return "error"
+    if mode in EXCLUDED_FROM_METRICS:
+        return "excluded"
+    if mode in _CRASH_MODES:
+        return "crashed"
     return "passed" if row.get("ok") else "failed"
 
 
@@ -509,9 +518,10 @@ class CampaignReader:
 
     @staticmethod
     def _cell_stats(cell: dict) -> dict:
-        """Running mean reach and pass count over the cell's scored trials
-        (errors and quarantined trials excluded, as in the summary)."""
-        scored = [t for t in cell["trials"] if t["state"] in ("passed", "failed")]
+        """Running mean reach and pass count over the cell's scored trials.
+        Matches summary.txt: crashed and quarantined trials count as 0;
+        only `excluded` trials are left out."""
+        scored = [t for t in cell["trials"] if t["state"] in _SCORED_STATES]
         cell["n_scored"] = len(scored)
         cell["n_passed"] = sum(t["state"] == "passed" for t in scored)
         cell["mean_reach"] = (round(statistics.fmean(float(t.get("score") or 0.0)

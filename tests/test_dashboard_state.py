@@ -61,14 +61,14 @@ def test_trial_states_from_rows_dirs_and_plan(tmp_path):
     (r,) = snap["runs"]
     states = _states(r)
     assert [states[t["trial_id"]] for t in plan] == [
-        "passed", "failed", "error", "leak", "running", "queued"]
+        "passed", "failed", "crashed", "leak", "running", "queued"]
     assert r["state"] == "running"
     assert r["counts"]["planned"] == 6
     assert r["spent_usd"] == pytest.approx(2.0)
     assert r["eta_s"] is not None
 
 
-def test_cell_stats_exclude_errors(tmp_path):
+def test_cell_stats_exclude_only_session_limits(tmp_path):
     run, plan = _make_run(tmp_path, loadouts=("tools",))
     (run / "trials.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
         _row(plan[0], ok=True, score=1.0),
@@ -287,3 +287,18 @@ def test_feedback_from_trial_json(tmp_path):
     assert reader.trial_feedback("run_a", tid)["blind_rating"] == "7/10"
     assert reader.list_files("run_a", tid)["has_feedback"] is True
     assert reader.list_files("run_a", tid, "cards")["has_feedback"] is False
+
+
+def test_cell_stats_score_crashes_and_leaks_as_zero_like_the_summary(tmp_path):
+    run, plan = _make_run(tmp_path, n=4, loadouts=("tools",))
+    (run / "trials.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        _row(plan[0], ok=True, score=1.0),
+        _row(plan[1], ok=False, score=0.0, mode="AGENT_CRASH"),
+        _row(plan[2], ok=False, score=0.0, mode="INTEGRITY_LEAK"),
+        _row(plan[3], ok=False, score=0.0, mode="SESSION_LIMIT")]))
+    (r,) = CampaignReader(tmp_path).snapshot()["runs"]
+    (cell,) = r["cells"]
+    assert [t["state"] for t in cell["trials"]] == ["passed", "crashed", "leak", "excluded"]
+    assert cell["n_scored"] == 3 and cell["n_passed"] == 1
+    assert cell["mean_reach"] == pytest.approx(1 / 3, abs=1e-4)
+    assert r["counts"]["crashed"] == 1 and r["counts"]["excluded"] == 1

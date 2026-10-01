@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **`toolbench dashboard [TARGET]`**: a read-only live view of a run in the browser.
   With no target it opens the most recently started run. It shows headline figures,
-  a trial matrix per cell (queued, running, reach-shaded, errored, interrupted), a
+  a trial matrix per cell (queued, running, reach-shaded, crashed, excluded, interrupted), a
   docked inspector that follows the active trial's live log, recent completions, and
   `summary.txt` once the run finalizes. Given a directory of runs, it adds a run
   picker. Standard library only; binds to `127.0.0.1`.
