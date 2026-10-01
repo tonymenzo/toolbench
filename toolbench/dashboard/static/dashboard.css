@@ -174,12 +174,16 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
 
 /* ── legend ──────────────────────────────────────────────── */
 
-.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--ink-3); font-size: 11px; margin-bottom: 14px; }
-.legend > span { display: inline-flex; align-items: center; gap: 6px; }
-.legend .sq { --sq: 11px; font-size: 0; cursor: default; }
+/* Set under the matrix as a caption: quieter than the data it explains. */
+.legend {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-3); font-size: 10.5px;
+  padding-top: 8px; border-top: 1px solid var(--rule);
+}
+.legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.legend .sq { --sq: 9px; font-size: 0; cursor: default; }
 .legend .sq.running::after { display: none; }
 .ramp { display: inline-flex; }
-.ramp i { width: 9px; height: 11px; }
+.ramp i { width: 7px; height: 9px; }
 
 /* ── matrix ──────────────────────────────────────────────── */
 
@@ -231,7 +235,7 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
 
 /* ── recent completions ──────────────────────────────────── */
 
-.primary .label.recent-label { margin-top: 32px; }
+.primary .label.recent-label { margin-top: 30px; }
 .recent { list-style: none; margin: 8px 0 0; padding: 0; }
 .recent li {
   display: grid; grid-template-columns: 7ch minmax(0, 1fr) 5ch 8ch; gap: 16px;
@@ -287,10 +291,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 
 /* Sandbox view: breadcrumbs, source line, git-status style marks. */
-.crumbs { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px; }
-.crumbs .ghost { padding: 0; color: var(--ink-2); }
-.crumbs .ghost:hover { color: var(--accent); }
-.crumbs .sep { color: var(--rule-2); margin: 0 3px; }
+.filehead { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.back { padding: 0; color: var(--ink-2); flex: none; align-self: flex-start; margin-bottom: 6px; }
+.back:hover { color: var(--accent); }
+.fpath { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fmeta { color: var(--ink-3); font-size: 11px; margin: 4px 0 8px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
 /* Legend entries wear the same colours as the marks they explain. */
 .fkey { display: inline-flex; gap: 12px; }
@@ -304,7 +308,14 @@ body.resizing { cursor: col-resize; user-select: none; }
   border-top: 1px solid var(--rule); cursor: pointer;
 }
 .files li.f:hover { background: var(--raise); }
-.files .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Tree: each level indents by --depth; folders carry a disclosure caret. */
+.files .nm {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding-left: calc(var(--depth, 0) * 14px);
+}
+.files .caret { display: inline-block; width: 1.6ch; color: var(--ink-3); }
+.files li.feedback .mk, .files li.feedback .nm { color: var(--live); }
+.files li.feedback .nm { padding-left: 1.6ch; }
 .files .sz { text-align: right; color: var(--ink-3); }
 .files .mk { font-weight: 700; }
 .files li.same .nm { color: var(--ink-3); }
@@ -314,7 +325,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .files li.deleted { cursor: default; }
 .files li.deleted .mk { color: var(--critical); }
 .files li.deleted .nm { color: var(--critical); text-decoration: line-through; }
-.log.prompt { flex: none; max-height: 40vh; min-height: 0; white-space: pre-wrap; margin-bottom: 14px; }
+.log.prompt, .log.prose { flex: none; max-height: 40vh; min-height: 0; white-space: pre-wrap; margin-bottom: 14px; }
+.log.prose { max-height: none; }
+.label .note { margin-left: 10px; letter-spacing: .04em; text-transform: none; color: var(--ink-3); opacity: .8; }
 
 /* ── tooltip ─────────────────────────────────────────────── */
 

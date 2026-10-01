@@ -275,3 +275,15 @@ def test_workspace_refuses_paths_outside_the_sandbox(tmp_path, rel):
     reader = CampaignReader(tmp_path)
     assert reader.read_file("run_a", tid, rel) is None
     assert reader.list_files("run_a", tid, rel) is None
+
+
+def test_feedback_from_trial_json(tmp_path):
+    run, tid, _ = _trial_with_sandbox(tmp_path)
+    reader = CampaignReader(tmp_path)
+    assert reader.trial_feedback("run_a", tid) is None
+    assert reader.list_files("run_a", tid)["has_feedback"] is False
+    (run / "trials" / tid / "trial.json").write_text(json.dumps({"ux_feedback": {
+        "blind_rating": "7/10", "response": "The flux tool was clear.", "error": None}}))
+    assert reader.trial_feedback("run_a", tid)["blind_rating"] == "7/10"
+    assert reader.list_files("run_a", tid)["has_feedback"] is True
+    assert reader.list_files("run_a", tid, "cards")["has_feedback"] is False

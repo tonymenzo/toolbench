@@ -24,9 +24,9 @@ const ui = {
   trial: null,      // trial shown in the inspector
   follow: true,     // inspector tracks the newest active trial
   itab: "overview", // inspector tab: "overview" | "prompts" | "files"
-  inspected: null,  // trial the file view was last reset for
-  fdir: "",         // sandbox directory being listed
-  ffile: null,      // sandbox file being viewed
+  inspected: null,  // trial the sandbox view was last reset for
+  expanded: new Set(), // sandbox directories open in the tree
+  ffile: null,      // sandbox file being viewed, or FEEDBACK
   summaryFor: null, // run id whose summary is loaded
   timer: null,
 };
@@ -307,9 +307,9 @@ async function renderInspector(run) {
     b.setAttribute("aria-selected", String(b.dataset.itab === ui.itab));
   }
   $("trial-id").textContent = ui.trial || "—";
-  if (ui.trial !== ui.inspected) {  // a new trial: start its file view at the root
+  if (ui.trial !== ui.inspected) {  // a new trial: start with its tree collapsed
     ui.inspected = ui.trial;
-    ui.fdir = "";
+    ui.expanded = new Set();
     ui.ffile = null;
   }
   const body = $("inspector");
@@ -317,7 +317,7 @@ async function renderInspector(run) {
     body.replaceChildren(h("p", { class: "empty" }, "No trial has started."));
     return;
   }
-  const key = `${ui.trial}|${ui.itab}|${ui.fdir}|${ui.ffile}`;
+  const key = `${ui.trial}|${ui.itab}|${ui.ffile}`;
   try {
     if (ui.itab === "prompts") {
       if (body.dataset.key !== key) await renderPrompts(run, body);  // prompts never change
@@ -344,59 +344,108 @@ async function renderPrompts(run, body) {
     h("h3", { class: "label" }, "user"), h("pre", { class: "log prompt" }, p.user || "(empty)"));
 }
 
-function crumbs(path, onDir) {
-  const parts = path ? path.split("/") : [];
-  const nav = h("div", { class: "crumbs" },
-    h("button", { type: "button", class: "ghost", onclick: () => onDir("") }, "sandbox"));
-  parts.forEach((part, i) => nav.append(h("span", { class: "sep" }, "/"),
-    h("button", { type: "button", class: "ghost", onclick: () => onDir(parts.slice(0, i + 1).join("/")) }, part)));
-  return nav;
-}
+// Pseudo-path for the agent's post-task feedback, pinned atop the tree.
+const FEEDBACK = "\u0000feedback";
 
+/* The sandbox tab: an expandable tree, or one file (or the feedback) open
+   for reading. Expanded folders are re-listed on every poll, so the marks
+   stay live; scroll position survives the refresh. */
 async function renderFiles(run, body) {
-  const openDir = (dir) => { ui.fdir = dir; ui.ffile = null; render(); };
   const scroller = body.querySelector(".scroll");
-  const keep = body.dataset.key === `${ui.trial}|${ui.itab}|${ui.fdir}|${ui.ffile}`;
+  const keep = body.dataset.key === `${ui.trial}|${ui.itab}|${ui.ffile}`;
   const top = keep && scroller ? scroller.scrollTop : 0;
+  const back = h("button", { type: "button", class: "ghost back",
+    onclick: () => { ui.ffile = null; render(); } }, "‹ sandbox");
 
-  if (ui.ffile) {
+  if (ui.ffile === FEEDBACK) {
+    body.replaceChildren(back, ...feedbackView(await trialApi("feedback", run)));
+  } else if (ui.ffile) {
     const f = await trialApi("file", run, { path: ui.ffile });
     if (!f) { ui.ffile = null; return renderFiles(run, body); }  // removed since
-    body.replaceChildren(crumbs(ui.ffile, openDir),
+    body.replaceChildren(
+      h("div", { class: "filehead" }, back, h("span", { class: "fpath" }, ui.ffile)),
       h("div", { class: "fmeta" }, `${fmt.bytes(f.size)}${f.truncated ? " · first 256 KB" : ""}`),
       h("pre", { class: "log scroll" }, f.binary ? "(binary file)" : f.text));
   } else {
-    const l = await trialApi("files", run, { path: ui.fdir });
-    if (!l) {
-      if (ui.fdir) { ui.fdir = ""; return renderFiles(run, body); }
+    const root = await trialApi("files", run, { path: "" });
+    if (!root) {
       body.replaceChildren(h("p", { class: "empty" }, "No workspace yet."));
       return;
     }
+    // Fetch every open folder in parallel; forget ones that have vanished.
+    const open = [...ui.expanded];
+    const listed = await Promise.all(open.map((d) => trialApi("files", run, { path: d }).catch(() => null)));
+    const children = new Map();
+    open.forEach((d, i) => (listed[i] ? children.set(d, listed[i].entries) : ui.expanded.delete(d)));
+
+    const rows = [];
+    if (root.has_feedback) {
+      rows.push(h("li", { class: "f feedback", onclick: () => { ui.ffile = FEEDBACK; render(); } },
+        h("span", { class: "mk" }, "◆"), h("span", { class: "nm" }, "agent feedback"), h("span", { class: "sz" }, "")));
+    }
+    const walk = (entries, depth) => {
+      for (const e of entries) {
+        const isDir = e.type === "dir";
+        const isOpen = isDir && ui.expanded.has(e.path);
+        rows.push(h("li", {
+          class: `f ${e.mark || ""} ${e.type}`,
+          style: `--depth:${depth}`,
+          "aria-expanded": isDir ? String(isOpen) : null,
+          onclick: e.mark === "deleted" ? null : () => {
+            if (isDir) {
+              if (isOpen) ui.expanded.delete(e.path); else ui.expanded.add(e.path);
+            } else {
+              ui.ffile = e.path;
+            }
+            render();
+          },
+        },
+          h("span", { class: "mk" }, MARK_GLYPH[e.mark] ?? ""),
+          h("span", { class: "nm" },
+            h("span", { class: "caret" }, isDir && e.mark !== "deleted" ? (isOpen ? "▾" : "▸") : ""),
+            e.name + (isDir ? "/" : "")),
+          h("span", { class: "sz" }, e.size === null ? "" : fmt.bytes(e.size))));
+        if (isOpen) walk(children.get(e.path) || [], depth + 1);
+      }
+    };
+    walk(root.entries, 0);
+
     const source = {
       sandbox: run.state === "running" ? "live sandbox" : "sandbox (kept)",
       artifacts: "preserved artifacts · sandbox removed",
       none: "no sandbox or artifacts on disk",
-    }[l.source];
-    const rows = l.entries.map((e) => h("li", {
-      class: `f ${e.mark || ""} ${e.type}`,
-      onclick: e.mark === "deleted" ? null
-        : () => (e.type === "dir" ? openDir(e.path) : ((ui.ffile = e.path), render())),
-    },
-      h("span", { class: "mk" }, MARK_GLYPH[e.mark] ?? ""),
-      h("span", { class: "nm" }, e.name + (e.type === "dir" ? "/" : "")),
-      h("span", { class: "sz" }, e.size === null ? "" : fmt.bytes(e.size))));
-    body.replaceChildren(crumbs(l.path, openDir),
+    }[root.source];
+    body.replaceChildren(
       h("div", { class: "fmeta" }, source,
-        l.has_init ? h("span", { class: "fkey" },
+        root.has_init ? h("span", { class: "fkey" },
           h("span", { class: "added" }, "+ added"), h("span", { class: "modified" }, "~ modified"),
-          l.source === "sandbox" ? h("span", { class: "deleted" }, "− deleted") : null,
+          root.source === "sandbox" ? h("span", { class: "deleted" }, "− deleted") : null,
           h("span", { class: "same" }, "at start"))
           : " · no initial snapshot"),
       h("ul", { class: "files scroll" }, rows.length ? rows : h("li", { class: "empty" }, "empty")),
-      l.truncated ? h("p", { class: "empty" }, "listing truncated") : null);
+      root.truncated ? h("p", { class: "empty" }, "listing truncated") : null);
   }
-  const s = body.querySelector(".scroll");
-  if (s) s.scrollTop = top;
+  const sc = body.querySelector(".scroll");
+  if (sc) sc.scrollTop = top;
+}
+
+/* The agent's post-task feedback, labelled by the turn that produced it. */
+function feedbackView(fb) {
+  if (!fb) return [h("p", { class: "empty" }, "No feedback recorded for this trial.")];
+  const out = [];
+  const block = (title, note, text) => out.push(
+    h("h3", { class: "label" }, title, note ? h("span", { class: "note" }, note) : null),
+    h("pre", { class: "log prose" }, text));
+  if (fb.blind_rating && fb.response) {
+    block("before grading", "blind rating", fb.blind_rating);
+    block("after grading", "audit + critique, grade revealed", fb.response);
+  } else if (fb.blind_rating) {
+    block("experience rating", "no domain tools served", fb.blind_rating);
+  } else if (fb.response) {
+    block("critique", "grade not revealed", fb.response);
+  }
+  if (fb.error) block("feedback turn failed", null, fb.error);
+  return out;
 }
 
 async function renderOverview(run, body) {
@@ -576,6 +625,9 @@ try {
   if (saved) document.documentElement.dataset.theme = saved;
 } catch { /* storage blocked */ }
 window.addEventListener("scroll", untip, { passive: true });
+// A pasted link or back/forward changes only the hash: apply it in place.
+// (writeHash uses replaceState, which does not fire this event.)
+window.addEventListener("hashchange", () => { readHash(); render(); });
 initSplitter();
 renderLegend();
 readHash();

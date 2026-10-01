@@ -321,7 +321,24 @@ class CampaignReader:
         entries.sort(key=lambda e: (e["type"] != "dir", e["name"]))
         return {"source": source, "path": rel.strip("/"), "entries": entries,
                 "truncated": len(children) > MAX_LISTING,
-                "has_init": init is not None}
+                "has_init": init is not None,
+                "has_feedback": not rel.strip("/") and self.trial_feedback(run_id, trial_id) is not None}
+
+    def trial_feedback(self, run_id: str, trial_id: str) -> dict | None:
+        """The agent's post-task feedback from `trial.json`, if it gave any.
+
+        Present only for harnesses with `loop.ux_feedback` enabled, and only
+        once the trial has finished. Keys: `blind_rating` (given before the
+        grade is revealed; for an arm with no domain tools, an overall
+        experience rating), `response` (after the grade in graded mode, else
+        a critique without it), and `error` if a feedback turn failed.
+        """
+        trial_dir = self._trial_dir(run_id, trial_id)
+        if trial_dir is None:
+            return None
+        record = self._cache.load(trial_dir / "trial.json", _parse_json)
+        feedback = (record or {}).get("ux_feedback") if isinstance(record, dict) else None
+        return feedback or None
 
     def read_file(self, run_id: str, trial_id: str, rel: str) -> dict | None:
         """A workspace file's text (up to FILE_VIEW_BYTES), or `binary: True`."""

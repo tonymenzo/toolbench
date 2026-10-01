@@ -139,11 +139,15 @@ live `console.log`. Clicking any trial pins the inspector to it, with its result
 checklist, and tool calls. Once the run finalizes, a summary view shows `summary.txt`.
 
 The inspector's **prompts** tab shows the exact system and user prompts the trial was given.
-Its **sandbox** tab is a live file browser over the trial's sandbox, marked
+Its **sandbox** tab is a live, expandable tree of the trial's sandbox (click a folder to
+open it in place, a file to read it), marked
 like `git status` against its state when the agent started: `+` added, `~` modified,
 `−` deleted, and dimmed for files present from the start (seed and harness setup alike).
 Once a trial ends and its sandbox is cleaned up, the browser shows the preserved
 `artifacts/` instead. The sandbox is only read while that tab is open.
+When the harness collects agent feedback (`loop.ux_feedback`), a finished trial's tree is
+headed by an **agent feedback** entry: the blind rating given before the grade was
+revealed and the audit given after it (or the single critique, in ungraded mode).
 
 Given a directory that holds several runs (a campaign, nested at any depth), the page adds
 a run picker; every `manifest.json` beneath the directory counts as a run.
