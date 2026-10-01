@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-30
+
+Campaigns, and an MCP preflight that cannot pass vacuously. Group a multi-benchmark
+campaign with `--campaign` and watch it from one dashboard; the preflight that guards
+`claude_code` / `codex` tools arms now fails when it has nothing to verify, checks the
+project the trials will actually use, and runs on `resume` too. Nothing touching grading.
+
 ### Added
 
 - **`run --campaign NAME`** groups runs, typically one per benchmark, under
@@ -34,6 +41,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   projects. `toolbase serve` has no project-root option, so such a run is now refused
   with an explanation. `run` and `resume` also print the toolbase project the trials will
   use (by toolbase's own lookup), and record it with each preflight check.
+
+### Upgrading
+
+No action needed for runs launched from the project that holds `.toolbase/`; scores, reach,
+pass@k and pass^k are unchanged. Two setups that previously ran tools arms without their
+tools now stop at the preflight instead, before spending anything: launching from outside
+the project, and a `claude_code` / `codex` loadout that sets `project_root:` (remove it and
+launch from that project). `resume` now runs the same check.
 
 ## [0.9.0] — 2026-09-30
 
