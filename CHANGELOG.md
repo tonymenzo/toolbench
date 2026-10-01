@@ -8,14 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-09-30
+
+Watch a run live. A read-only browser dashboard for a run in progress, and an integrity
+scan that flags a leaking trial as it lands instead of at the end. Nothing touching
+grading; new files in run directories are observational and stay out of `export`.
+
 ### Added
 
 - **`toolbench dashboard [TARGET]`**: a read-only live view of a run in the browser.
-  With no target it opens the most recently started run. It shows headline figures,
-  a trial matrix per cell (queued, running, reach-shaded, crashed, excluded, interrupted), a
-  docked inspector that follows the active trial's live log, recent completions, and
-  `summary.txt` once the run finalizes. Given a directory of runs, it adds a run
-  picker. Standard library only; binds to `127.0.0.1`.
+  With no target it opens the most recently started run; given a directory of runs it
+  adds a run picker. It shows:
+  - a trial matrix per cell: queued, running, reach-shaded, crashed (scored 0), excluded
+    (not scored), integrity-quarantined, interrupted; cell reach and pass counts follow
+    `summary.txt`'s scoring;
+  - a docked trial inspector that follows the active trial: its result and live log, its
+    exact prompts, and its sandbox as a live tree marked against its starting state
+    (`+` added, `~` modified, `-` deleted), headed by the agent's feedback before and
+    after grading when the harness collects it;
+  - recent completions, and `summary.txt` once the run finalizes;
+  - a status bar with progress, reach, spend and ETA (subscription runs: $0.00 spent
+    plus an estimated API equivalent, as in the summary).
+
+  Standard library only; read-only; binds to `127.0.0.1`.
 - **`run --dashboard` / `resume --dashboard`** serve that dashboard from the run's own
   process while it executes and print its URL (`--dashboard-port`, default 8765; a free
   port is used if it is taken). It stops when the run ends.
@@ -42,6 +57,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   script opening `soln/truth.json` still is. Commands, paths and executed code are matched
   as before. Each hit now records `where` it matched (`input` or `file body`). Re-scanning
   the 596 transcripts in the hepbench-dev runs gives identical verdicts under both rules.
+
+### Upgrading
+
+No action needed. `--dashboard` is opt-in, and scores, reach, pass@k and pass^k are
+unchanged. Runs recorded by 0.8.x open in `toolbench dashboard`: their plan is
+re-enumerated from the manifest, and they show "no heartbeat" (or finished, once they have
+a summary) since liveness, prompts and the initial sandbox were not recorded then.
 
 ## [0.8.2] — 2026-09-30
 
