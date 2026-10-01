@@ -76,6 +76,9 @@ runs, grades, or aggregates trials reads them, and `toolbench export` does not i
 them. While a run is executing, `status.json` has `"state": "running"` and its `updated_at`
 is refreshed every 10 s; a heartbeat older than 60 s means the process is gone.
 
+A run started with `--campaign NAME` is written to `runs/campaigns/NAME/<run_id>/` instead,
+with the same layout; its manifest records `"campaign": "NAME"`.
+
 A `trial_id` encodes its cell, e.g. `full_local__n000__seed1001` (and includes the
 harness/variant/model when those axes are swept).
 

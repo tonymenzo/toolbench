@@ -493,7 +493,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     run_label = args.run_label or ("dryrun" if args.dry_run else "run")
     run_id = f"{timestamp}_{bench_name}_{_model_slug(models[0])}_{run_label}"
-    run_dir = _runs_root() / run_id
+    campaign = getattr(args, "campaign", None)
+    if campaign is not None and not _CAMPAIGN_NAME.fullmatch(campaign):
+        print(f"--campaign {campaign!r}: use letters, digits, '.', '_' and '-' only "
+              "(it names a directory under runs/campaigns/).", file=sys.stderr)
+        return 2
+    run_dir = _runs_root() / _campaign_prefix(campaign) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     seeds = [args.seed_base + i for i in range(args.n)]
@@ -516,6 +521,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     manifest = {
         "run_id": run_id,
+        "campaign": campaign,
         "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "git_sha": _git_sha(),
         "benchmark_git_sha": _git_sha(bench_dir),
@@ -590,6 +596,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     with (_tee_stdout(run_dir / "console.log"), RunStatus(run_dir) as status,
           _live_dashboard(run_dir, args) as dashboard_url):
         print(f"Run: {run_id}")
+        if campaign:
+            print(f"  Campaign: {campaign}  (resume/regrade/export with "
+                  f"--run-id {_campaign_prefix(campaign)}/{run_id})")
         if dashboard_url:
             print(f"  Dashboard: {dashboard_url}  (live while this run executes)")
         print(f"  Benchmark: {bench_name} | Harness(es): {h_ids} | Models: {models}")
@@ -1170,6 +1179,17 @@ def _mcp_preflight(harnesses, loadouts, resolution_reports: list[dict],
                 continue
             failures.append(f"{label}: {record['error']}")
     return failures, records
+
+
+# A campaign name becomes one directory under runs/campaigns/.
+_CAMPAIGN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _campaign_prefix(campaign: str | None) -> str:
+    """Path under runs/ that holds a campaign's runs ("" for no campaign).
+    Runs anywhere below runs/ resolve by nested --run-id, so resume, regrade
+    and export need nothing campaign-specific."""
+    return f"campaigns/{campaign}" if campaign else ""
 
 
 def _live_dashboard(run_dir: Path, args):
@@ -2436,6 +2456,11 @@ def cli() -> None:
               help="Print a stylish line per tool call (▸ start, ✓/✗ end). "
                    "Honors NO_COLOR.")
 @click.option("--run-label", "run_label", default=None)
+@click.option("--campaign", "campaign", default=None, metavar="NAME",
+              help="Group this run with others under runs/campaigns/NAME/. "
+                   "Its run id for resume/regrade/export becomes "
+                   "campaigns/NAME/<id>; `toolbench dashboard --campaign NAME` "
+                   "watches every run in it.")
 @click.option("--keep-sandbox", "keep_sandbox", is_flag=True, default=False,
               help="Do not delete each trial's sandbox after grading. Keeps "
                    "the full working tree (not just preserved artifacts) — "
@@ -2565,7 +2590,11 @@ def _export(run_id: str, out: str | None, include_transcripts: bool,
               help="Port to serve on (0 picks a free one).")
 @click.option("--poll", "poll_s", type=float, default=3.0, show_default=True,
               help="Seconds between browser refreshes.")
-def _dashboard(target: str | None, host: str, port: int, poll_s: float) -> int:
+@click.option("--campaign", "campaign", default=None, metavar="NAME",
+              help="Watch every run of a campaign (runs/campaigns/NAME), with a "
+                   "run picker. Equivalent to TARGET runs/campaigns/NAME.")
+def _dashboard(target: str | None, host: str, port: int, poll_s: float,
+               campaign: str | None) -> int:
     """Serve a read-only live view of a run: its trial matrix, the trial
     being worked on, recent results, and the summary once it finalizes.
 
@@ -2576,6 +2605,14 @@ def _dashboard(target: str | None, host: str, port: int, poll_s: float) -> int:
     from toolbench.dashboard import serve
     from toolbench.dashboard.state import discover_runs
 
+    if campaign is not None:
+        if target is not None:
+            raise click.UsageError("give TARGET or --campaign, not both")
+        root = _runs_root() / _campaign_prefix(campaign)
+        if not root.is_dir():
+            raise click.ClickException(f"no campaign {campaign!r} at {root}")
+        serve(root, host=host, port=port, poll_s=poll_s)
+        return 0
     if target is None:
         runs = discover_runs(_runs_root()) if _runs_root().is_dir() else []
         if not runs:

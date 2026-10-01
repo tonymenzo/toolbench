@@ -51,6 +51,7 @@ is the scannable reference. `toolbench --help` groups the commands, and `toolben
 | `--dry-run`                   | off                | Skip the LLM call, validate wiring, print the resolution preview. |
 | `--dashboard`                 | off                | Serve the live [dashboard](#toolbench-dashboard) while the run executes; prints its URL. |
 | `--dashboard-port`            | `8765`             | Port for `--dashboard`; a free one is used if it is taken.     |
+| `--campaign NAME`             | none               | Write the run under `runs/campaigns/NAME/`; its `--run-id` becomes `campaigns/NAME/<id>`. |
 | `-v` / `--verbose`            | off                | A styled line per tool call. Honors `NO_COLOR`.               |
 | `--run-label`                 | `run` / `dryrun`   | Suffix for the run id.                                         |
 
@@ -124,6 +125,7 @@ existing field bumps the major.
 ```bash
 toolbench dashboard                  # the most recently started run under ./runs
 toolbench dashboard <run-id | dir>   # a specific run, or a directory of runs
+toolbench dashboard --campaign NAME  # every run of a campaign (runs/campaigns/NAME)
 ```
 
 | Flag     | Default     | Meaning                                                        |
