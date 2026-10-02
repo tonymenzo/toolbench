@@ -7,6 +7,22 @@ every (before_call, after_call) pair as a `ToolCall` on a shared
 `Trajectory` instance and emits one column-aligned line per *completed*
 call, mirrored to stdout (when verbose) and the per-trial console.log.
 The rendering helpers live in `toolbench.reporting.transcript`.
+
+With `events_path` set it also streams the trial as it happens to
+`events.jsonl` (`EVENTS_FILE`), one JSON record per line, for live
+monitoring (`toolbench dashboard`):
+
+  {"type": "tool_start", "id": 3, "t": 12.1, "name": ..., "args": {...}}
+  {"type": "tool_call",  "id": 3, "t": 12.9, "name": ..., "args": {...},
+   "duration_s": 0.8, "ok": true, "result_summary": "..."}
+  {"type": "agent",      "t": 14.0, "text": "..."}
+  {"type": "intervention", "t": ..., "kind": "rate_limit_retry", ...}
+
+`t` is seconds since the hook was created; a `tool_call` carries the same
+fields as its transcript record plus the `id` of its `tool_start`. Like
+`status.json` the file is observational: nothing that grades or
+aggregates reads it (`transcript.jsonl.gz` stays authoritative), and a
+failure to write it never fails the trial.
 """
 
 import json
@@ -23,6 +39,9 @@ from toolbench.reporting.transcript import W_TIME, fmt_elapsed, render_call_line
 
 
 _RESULT_TRUNCATE = 1000
+# Longest agent message kept in events.jsonl (console.log keeps 600 chars).
+_AGENT_TEXT_TRUNCATE = 20000
+EVENTS_FILE = "events.jsonl"
 _ERROR_TRUNCATE = 200
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -188,21 +207,69 @@ class TrajectoryHook(ToolHook):
     """
 
     def __init__(self, trajectory: Trajectory, verbose: bool = False,
-                 log_path: str | Path | None = None):
+                 log_path: str | Path | None = None,
+                 events_path: str | Path | None = None):
         self.trajectory = trajectory
         self.verbose = verbose
         self._t0 = time.monotonic()
-        self._pending: list[tuple[str, dict, float]] = []
+        self._pending: list[tuple[str, dict, float, int]] = []
+        self._next_id = 1
         self._log_fp = None
         if log_path is not None:
             p = Path(log_path)
             p.parent.mkdir(parents=True, exist_ok=True)
             self._log_fp = open(p, "w", encoding="utf-8")
+        self._events_fp = None
+        if events_path is not None:
+            try:
+                p = Path(events_path)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                self._events_fp = open(p, "w", encoding="utf-8")
+            except OSError:
+                pass
 
     def close(self) -> None:
         if self._log_fp is not None:
             self._log_fp.close()
             self._log_fp = None
+        if self._events_fp is not None:
+            try:
+                self._events_fp.close()
+            except OSError:
+                pass
+            self._events_fp = None
+
+    def _event(self, record: dict) -> None:
+        """Append one record to events.jsonl. Never raises: on a write
+        failure the stream stops and the trial carries on."""
+        if self._events_fp is None:
+            return
+        try:
+            self._events_fp.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            self._events_fp.flush()
+        except (OSError, TypeError, ValueError):
+            try:
+                self._events_fp.close()
+            except OSError:
+                pass
+            self._events_fp = None
+
+    def agent_message(self, text: str, console_truncate: int = 600) -> None:
+        """Record a message the agent wrote between tool calls: a dim
+        `[agent]` line in console.log, the full text in events.jsonl."""
+        text = (text or "").strip()
+        if not text:
+            return
+        elapsed = time.monotonic() - self._t0
+        self._emit(f"{fmt_elapsed(elapsed).ljust(W_TIME)}  [agent]  {_truncate(text, console_truncate)}")
+        if len(text) > _AGENT_TEXT_TRUNCATE:
+            text = text[:_AGENT_TEXT_TRUNCATE] + "...[truncated]"
+        self._event({"type": "agent", "t": round(elapsed, 4), "text": text})
+
+    def intervention(self, record: dict) -> None:
+        """Record a recovery turn the runner injected into the session."""
+        self._event({**record, "type": "intervention", "kind": record.get("type"),
+                     "t": round(time.monotonic() - self._t0, 4)})
 
     def write_to_log(self, text: str) -> None:
         """Append a free-form line (e.g. trial header / footer / crash trace)."""
@@ -230,7 +297,11 @@ class TrajectoryHook(ToolHook):
 
     def before_call(self, tool_name: str, arguments: dict) -> ToolHookResult:
         args = _safe_args(arguments)
-        self._pending.append((tool_name, args, time.monotonic()))
+        now = time.monotonic()
+        call_id, self._next_id = self._next_id, self._next_id + 1
+        self._pending.append((tool_name, args, now, call_id))
+        self._event({"type": "tool_start", "id": call_id, "t": round(now - self._t0, 4),
+                     "name": tool_name, "args": args})
         return ToolHookResult(approved=True)
 
     def after_call(self, tool_name: str, result) -> ToolHookResult:
@@ -241,10 +312,10 @@ class TrajectoryHook(ToolHook):
                 break
         now = time.monotonic()
         if match_idx is not None:
-            _, args, start = self._pending.pop(match_idx)
+            _, args, start, call_id = self._pending.pop(match_idx)
             duration = now - start
         else:
-            args, duration = {}, 0.0
+            args, duration, call_id = {}, 0.0, None
 
         result_str = str(result)
         if len(result_str) > _RESULT_TRUNCATE:
@@ -260,6 +331,8 @@ class TrajectoryHook(ToolHook):
             ok=ok,
             result_summary=result_str,
         ))
+        self._event({"type": "tool_call", "id": call_id,
+                     **self.trajectory.tool_calls[-1].to_dict()})
         err_msg = "" if ok else _extract_error_msg(result)
         for line in render_call_line(
             t_start=t_start, name=tool_name, args=args,
@@ -280,9 +353,9 @@ def make_agent_display_hook(traj_hook: TrajectoryHook,
     between tool calls. Tool calls themselves are still rendered by
     `TrajectoryHook` (this hook does *not* duplicate them).
 
-    Output is also tee'd through the same TrajectoryHook log file so
-    the per-trial console.log captures both reasoning and tool calls
-    in one stream.
+    Output goes through `TrajectoryHook.agent_message`, so the
+    per-trial console.log captures both reasoning and tool calls in one
+    stream and events.jsonl carries the full text.
     """
     state = {"last_index": 0}
 
@@ -294,12 +367,8 @@ def make_agent_display_hook(traj_hook: TrajectoryHook,
         for i in range(state["last_index"], len(messages)):
             msg = messages[i]
             text = _extract_text(msg)
-            if not text:
-                continue
-            time_col = fmt_elapsed(time.monotonic() - traj_hook._t0).ljust(W_TIME)
-            traj_hook._emit(
-                f"{time_col}  [agent]  {_truncate(text, text_truncate)}"
-            )
+            if text:
+                traj_hook.agent_message(text, console_truncate=text_truncate)
         state["last_index"] = len(messages)
 
     return display
