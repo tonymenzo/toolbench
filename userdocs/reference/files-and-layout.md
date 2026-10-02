@@ -62,6 +62,7 @@ runs/<timestamp>_<benchmark>_<model>_<label>/
     ├── trial.json          # full per-trial record (grade, tokens, cost, config)
     ├── transcript.jsonl.gz # every tool call (gzipped)
     ├── console.log         # this trial's styled log
+    ├── events.jsonl        # tool calls, agent messages, recovery turns, as they happen
     ├── prompts.json        # the exact system + user prompts the agent was given
     ├── sandbox_init.json   # the sandbox's files/dirs when the agent started
     ├── audit.txt           # always written: full trajectory + every tool input
@@ -71,9 +72,10 @@ runs/<timestamp>_<benchmark>_<model>_<label>/
         └── scripts/        # agent-authored code lifted from the transcript
 ```
 
-`plan.json` and `status.json` exist for monitoring (`toolbench dashboard`). Nothing that
-runs, grades, or aggregates trials reads them, and `toolbench export` does not include
-them. While a run is executing, `status.json` has `"state": "running"` and its `updated_at`
+`plan.json`, `status.json` and each trial's `events.jsonl` exist for monitoring
+(`toolbench dashboard`). Nothing that runs, grades, or aggregates trials reads them, and
+`toolbench export` does not include them; `transcript.jsonl.gz` remains the authoritative
+record of a trial's tool calls. While a run is executing, `status.json` has `"state": "running"` and its `updated_at`
 is refreshed every 10 s; a heartbeat older than 60 s means the process is gone.
 
 A run started with `--campaign NAME` is written to `runs/campaigns/NAME/<run_id>/` instead,

@@ -20,6 +20,7 @@ a handful of `stat` calls per run once nothing is changing.
 from __future__ import annotations
 
 import datetime
+import gzip
 import json
 import os
 import re
@@ -31,6 +32,7 @@ from types import SimpleNamespace
 
 from toolbench.core.failure_modes import EXCLUDED_FROM_METRICS, HARD_PROCESS_FAILURES
 from toolbench.core.run_status import STALE_AFTER_S, STATUS_FILE
+from toolbench.core.trajectory import EVENTS_FILE
 from toolbench.core.trial_start import PROMPTS_FILE, SANDBOX_INIT_FILE
 
 # Finished-trial states, mirroring how `aggregate` scores rows:
@@ -46,6 +48,8 @@ _SCORED_STATES = ("passed", "failed", "crashed", "leak")
 
 # Bytes of a trial's console.log returned to the detail view.
 LOG_TAIL_BYTES = 64 * 1024
+# Most of events.jsonl returned per request; the page asks again for more.
+EVENTS_CHUNK_BYTES = 512 * 1024
 # Finished trials listed in a run's "recent" feed.
 RECENT_TRIALS = 8
 # Largest file the sandbox viewer returns (a longer file is cut to this),
@@ -102,6 +106,15 @@ def _parse_rows(path: Path) -> list[dict]:
         except json.JSONDecodeError:
             continue
     return rows
+
+
+def _parse_transcript(path: Path) -> list[dict]:
+    """Parse a trial's transcript.jsonl.gz (written once, when the trial ends)."""
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+    except EOFError as exc:  # caught mid-write
+        raise ValueError(str(exc)) from exc
 
 
 def _iso_to_epoch(value: str | None) -> float | None:
@@ -332,6 +345,50 @@ class CampaignReader:
                 "truncated": len(children) > MAX_LISTING,
                 "has_init": init is not None,
                 "has_feedback": not rel.strip("/") and self.trial_feedback(run_id, trial_id) is not None}
+
+    def trial_events(self, run_id: str, trial_id: str, since: int = 0) -> dict | None:
+        """The trial's activity — tool calls, agent messages, recovery
+        turns — read incrementally.
+
+        Live trials stream `events.jsonl` (see `TrajectoryHook`): the reply
+        holds the complete records after byte offset `since` (at most
+        EVENTS_CHUNK_BYTES of them), `next`, the offset to ask for next,
+        and `more` when the chunk was full.
+        A trial without that file (one recorded before it existed) falls
+        back to its `transcript.jsonl.gz` once finished, in one reply with
+        `next` None; `source` is "none" while there is neither.
+        """
+        trial_dir = self._trial_dir(run_id, trial_id)
+        if trial_dir is None:
+            return None
+        path = trial_dir / EVENTS_FILE
+        if path.is_file():
+            with open(path, "rb") as fh:
+                fh.seek(max(0, since))
+                chunk = fh.read(EVENTS_CHUNK_BYTES)
+            # Only whole lines: the writer may be mid-append.
+            end = chunk.rfind(b"\n") + 1
+            events = []
+            for line in chunk[:end].splitlines():
+                try:
+                    events.append(json.loads(line))
+                except ValueError:
+                    continue
+            return {"source": "events", "events": events, "next": max(0, since) + end,
+                    "more": len(chunk) == EVENTS_CHUNK_BYTES}
+        records = self._cache.load(trial_dir / "transcript.jsonl.gz", _parse_transcript)
+        if records is None:
+            return {"source": "none", "events": [], "next": 0, "more": False}
+        events, n_calls = [], 0
+        for r in records:
+            if r.get("type") == "tool_call":
+                n_calls += 1
+                events.append({**r, "id": n_calls})
+            elif "after_tool_call" in r:
+                # The runner writes {"type": "intervention", **iv}, so the
+                # record's type is the intervention's own kind.
+                events.append({**r, "type": "intervention", "kind": r.get("type")})
+        return {"source": "transcript", "events": events, "next": None, "more": False}
 
     def trial_feedback(self, run_id: str, trial_id: str) -> dict | None:
         """The agent's post-task feedback from `trial.json`, if it gave any.

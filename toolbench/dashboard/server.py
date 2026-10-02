@@ -18,6 +18,9 @@ Routes (all GET, all read-only):
                         one workspace file's text (capped)
   /api/feedback?run=ID&trial=TID
                         the agent's post-task feedback, once the trial ends
+  /api/events?run=ID&trial=TID&since=OFFSET
+                        the trial's tool calls, agent messages and recovery
+                        turns after byte OFFSET of its events.jsonl
 
 The workspace routes are only called while the page's sandbox tab is open.
 
@@ -42,10 +45,18 @@ from urllib.parse import parse_qs, urlparse
 from toolbench.dashboard.state import CampaignReader
 
 STATIC_DIR = Path(__file__).parent / "static"
-_TRIAL_ROUTES = ("/api/trial", "/api/prompts", "/api/files", "/api/file", "/api/feedback")
+_TRIAL_ROUTES = ("/api/trial", "/api/prompts", "/api/files", "/api/file", "/api/feedback",
+                 "/api/events")
 _CONTENT_TYPES = {".html": "text/html; charset=utf-8",
                   ".css": "text/css; charset=utf-8",
                   ".js": "text/javascript; charset=utf-8"}
+
+
+def _int(value: str | None) -> int:
+    try:
+        return max(0, int(value or 0))
+    except ValueError:
+        return 0
 
 
 def make_handler(reader: CampaignReader, poll_s: float) -> type[BaseHTTPRequestHandler]:
@@ -80,6 +91,8 @@ def make_handler(reader: CampaignReader, poll_s: float) -> type[BaseHTTPRequestH
                         "/api/files": lambda: reader.list_files(run, trial, query.get("path", "")),
                         "/api/file": lambda: reader.read_file(run, trial, query.get("path", "")),
                         "/api/feedback": lambda: reader.trial_feedback(run, trial),
+                        "/api/events": lambda: reader.trial_events(
+                            run, trial, _int(query.get("since"))),
                     }[url.path]()
                     if result is None:
                         self.send_error(HTTPStatus.NOT_FOUND)

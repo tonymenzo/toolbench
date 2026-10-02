@@ -289,6 +289,43 @@ def test_feedback_from_trial_json(tmp_path):
     assert reader.list_files("run_a", tid, "cards")["has_feedback"] is False
 
 
+def test_events_are_read_incrementally_and_whole_lines_only(tmp_path):
+    run, tid, _ = _trial_with_sandbox(tmp_path)
+    reader = CampaignReader(tmp_path)
+    assert reader.trial_events("run_a", tid) == {
+        "source": "none", "events": [], "next": 0, "more": False}
+    assert reader.trial_events("run_a", "no_such_trial") is None
+    start = {"type": "tool_start", "id": 1, "t": 1.0, "name": "read", "args": {}}
+    path = run / "trials" / tid / "events.jsonl"
+    # A torn final line (the writer mid-append) is left for the next read.
+    path.write_text(json.dumps(start) + "\n" + '{"type": "ag')
+    first = reader.trial_events("run_a", tid)
+    assert first["source"] == "events" and first["events"] == [start]
+    assert first["next"] == len(json.dumps(start)) + 1
+    agent = {"type": "agent", "t": 2.0, "text": "reading"}
+    path.write_text(json.dumps(start) + "\n" + json.dumps(agent) + "\n")
+    second = reader.trial_events("run_a", tid, since=first["next"])
+    assert second["events"] == [agent] and second["more"] is False
+    assert reader.trial_events("run_a", tid, since=second["next"])["events"] == []
+
+
+def test_events_fall_back_to_the_transcript(tmp_path):
+    import gzip
+    run, tid, _ = _trial_with_sandbox(tmp_path)
+    call = {"type": "tool_call", "t": 1.5, "name": "read_file", "args": {"path": "a"},
+            "duration_s": 0.2, "ok": True, "result_summary": "text"}
+    # The runner writes {"type": "intervention", **iv}: iv's own type wins.
+    retry = {"type": "transient_retry", "index": 0, "after_tool_call": 1,
+             "reason": "TRANSIENT_API_ERROR", "injected_message": "Continue."}
+    with gzip.open(run / "trials" / tid / "transcript.jsonl.gz", "wt") as fh:
+        for r in (call, retry, {"type": "assistant", "content": "done"}):
+            fh.write(json.dumps(r) + "\n")
+    got = CampaignReader(tmp_path).trial_events("run_a", tid, since=123)
+    assert got["source"] == "transcript" and got["next"] is None
+    assert got["events"] == [{**call, "id": 1},
+                             {**retry, "type": "intervention", "kind": "transient_retry"}]
+
+
 def test_cell_stats_score_crashes_and_leaks_as_zero_like_the_summary(tmp_path):
     run, plan = _make_run(tmp_path, n=4, loadouts=("tools",))
     (run / "trials.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [

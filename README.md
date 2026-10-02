@@ -102,15 +102,16 @@ toolbench run --benchmark examples/geometry --model claude-haiku-4-5 \
 ```
 
 The page shows a matrix of every trial per cell as it queues, runs and lands, the active
-trial's live log, its prompts and sandbox (files marked added / modified / deleted since
+trial's live activity (its messages and tool calls, each expandable to full input and output,
+over a per-tool timeline), its prompts and sandbox (files marked added / modified / deleted since
 the agent started), and the run's summary once it finalizes. The run's figures (progress,
 reach, spend, ETA) sit in a status bar along the bottom. For a run that has ended, or one
 started without the flag, use `toolbench dashboard [run-id | dir]`; given a directory of
-runs it adds a run picker.
+runs it shows every run in the top bar.
 
 To run several benchmarks as one campaign, give each run the same `--campaign NAME`: they
 land together under `runs/campaigns/NAME/`, and `toolbench dashboard --campaign NAME` watches
-all of them, with a picker in the top bar to switch between runs. The server is read-only and binds to `127.0.0.1`; on a remote
+all of them, with each run a circle in the top bar to switch between. The server is read-only and binds to `127.0.0.1`; on a remote
 machine, forward the port (`ssh -L 8765:localhost:8765 <host>`).
 
 ## Also

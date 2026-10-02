@@ -629,7 +629,13 @@ class ClaudeCodeAgent:
                 etype = ev.get("type")
                 if etype == "assistant":
                     for b in (ev.get("message") or {}).get("content") or []:
-                        if isinstance(b, dict) and b.get("type") == "tool_use":
+                        if (isinstance(b, dict) and b.get("type") == "text"
+                                and hasattr(hook, "agent_message")):
+                            try:
+                                hook.agent_message(b.get("text") or "")
+                            except Exception:
+                                pass
+                        elif isinstance(b, dict) and b.get("type") == "tool_use":
                             short = (b.get("name") or "tool").split("__")[-1]
                             id2name[b.get("id")] = short
                             if hook is not None:
@@ -1151,6 +1157,11 @@ class CodexAgent:
                     item = ev.get("item") or {}
                     if item.get("type") == "agent_message":
                         result_text = item.get("text") or result_text
+                        if hasattr(hook, "agent_message"):
+                            try:
+                                hook.agent_message(item.get("text") or "")
+                            except Exception:
+                                pass
                         continue
                     view = self._tool_view(item)
                     if view and hook is not None:

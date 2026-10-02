@@ -46,7 +46,7 @@ from .store import write_json, write_jsonl_gz
 from .trial_start import record_trial_start
 from .task import Grade, Task
 from .tool_resolver import build_agent_tools, release_sources
-from .trajectory import Trajectory, TrajectoryHook, make_agent_display_hook
+from .trajectory import EVENTS_FILE, Trajectory, TrajectoryHook, make_agent_display_hook
 from .variant import Variant
 from toolbench.reporting.transcript import render_footer, render_header
 
@@ -528,6 +528,7 @@ class TrialRunner:
         traj_hook = TrajectoryHook(
             trajectory, verbose=self.verbose,
             log_path=trial_dir / "console.log",
+            events_path=trial_dir / EVENTS_FILE,
         )
         hooks = [TruncateOutputHook(max_length=10000), traj_hook]
 
@@ -577,6 +578,10 @@ class TrialRunner:
         # never surface in trajectory.tool_calls, so we record them here and
         # weave them into the transcript for auditability.
         interventions: list[dict] = []
+
+        def intervene(record: dict) -> None:
+            interventions.append(record)
+            traj_hook.intervention(record)  # live, for the dashboard
         try:
             if isinstance(llm, StubLLM):
                 # Dry-run: skip the LLM call entirely. Persist a minimal
@@ -586,7 +591,9 @@ class TrialRunner:
                                    system_prompt=system_prompt, user_prompt=prompt)
                 trajectory.final_response = "[dry-run: agent.run skipped]"
             else:
-                display_hook = make_agent_display_hook(traj_hook) if self.verbose else None
+                # Always attached: agent text goes to console.log and
+                # events.jsonl; stdout only when verbose.
+                display_hook = make_agent_display_hook(traj_hook)
                 # Construct the agent via the runtime registry — the
                 # harness's `runtime.name` picks the implementation
                 # (validated against the registry by the CLI up front).
@@ -662,7 +669,7 @@ class TrialRunner:
                                 "backslash as \\\\, newline as \\n, tab as \\t, and "
                                 "double-quote as \\\". Avoid stray non-ASCII whitespace.\n"
                                 "Then continue the task.")
-                            interventions.append({
+                            intervene({
                                 "type": "format_retry",
                                 "index": format_retries,
                                 "after_tool_call": len(trajectory.tool_calls),
@@ -690,7 +697,7 @@ class TrialRunner:
                                 "The previous request was interrupted by a temporary "
                                 "provider error (rate limit). Continue the task from "
                                 "where you left off.")
-                            interventions.append({
+                            intervene({
                                 "type": "rate_limit_retry",
                                 "index": rate_limit_retries,
                                 "after_tool_call": len(trajectory.tool_calls),
@@ -722,7 +729,7 @@ class TrialRunner:
                                 "The previous request was interrupted by a temporary "
                                 "connection error reaching the model. Continue the "
                                 "task from where you left off.")
-                            interventions.append({
+                            intervene({
                                 "type": "transient_retry",
                                 "index": transient_retries,
                                 "after_tool_call": len(trajectory.tool_calls),
@@ -751,7 +758,7 @@ class TrialRunner:
                                 f"is not present yet ({missing}). Keep working with "
                                 "the tools until the deliverable exists; do not stop "
                                 "until you have produced it.")
-                            interventions.append({
+                            intervene({
                                 "type": "continue_nudge",
                                 "index": nudges,
                                 "after_tool_call": len(trajectory.tool_calls),

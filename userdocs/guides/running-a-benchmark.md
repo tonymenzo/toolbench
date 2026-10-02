@@ -151,8 +151,9 @@ A campaign is several runs that belong together, typically one per benchmark. Gi
 `toolbench run` the same `--campaign NAME` and they land under `runs/campaigns/NAME/`
 instead of loose in `runs/`. Each run's id then includes that prefix: `resume`, `regrade`
 and `export` take `--run-id campaigns/NAME/<run-id>`, which the run prints when it starts.
-Watch the whole campaign with `toolbench dashboard --campaign NAME`; the picker in the top
-bar lists every run with its benchmark, progress and state.
+Watch the whole campaign with `toolbench dashboard --campaign NAME`; the top bar shows each
+run as a circle (progress, state and mean reach at a glance), with a filterable list of
+every run behind the button at its end.
 
 ```bash
 for b in benchmarks/symbolic/*/; do
