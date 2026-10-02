@@ -8,6 +8,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-10-01
+
+A live view of what the agent is doing. Each trial now streams its tool calls, messages and
+recovery turns to `events.jsonl` as they happen, and the dashboard's log tab shows them as
+they land, each call expandable to its full input and output, over a per-tool timeline.
+Campaigns get a run strip in place of the picker. Nothing touching grading.
+
+### Added
+
+- **`trials/<id>/events.jsonl`**, written live by every runtime: a `tool_start` when a call
+  begins, a `tool_call` (the transcript's fields plus the start's `id`) when it returns,
+  the agent's messages, and recovery turns as the runner injects them. Like `status.json`
+  it is for monitoring only: nothing that grades or aggregates reads it, `toolbench export`
+  leaves it out, and a failure to write it never fails the trial. `transcript.jsonl.gz`
+  stays the authoritative record.
+- **Dashboard log tab: the trial's activity, live.** Agent messages and tool calls in
+  order; a call appears with a spinner when it starts and fills in when it returns, and
+  expands to its full input and output (results as recorded, capped at 1000 characters). A
+  timeline above draws one lane per tool with each call spanning its duration, failures in
+  red and recovery turns as dashed rules; click a lane to narrow the feed to that tool.
+  Polling reads only what was appended since the last poll, so a long trial costs no more
+  to watch than a short one. Trials recorded before `events.jsonl` show their transcript
+  once finished; **raw** shows `console.log` as written.
+- **Campaign run strip.** The run picker is replaced by one circle per run: the ring is its
+  progress in its state colour (a live run's ring has an orbiting sweep), the fill its mean
+  reach. As many as fit are shown; a **+N** button opens a filterable list of every run.
+
+### Changed
+
+- **Agent messages are recorded from every runtime.** The `claude_code` and `codex`
+  runtimes now forward the agent's text, and orchestral's is captured without `--verbose`,
+  so `console.log` carries `[agent]` lines in quiet runs too.
+- Dashboard trial squares are larger (22px, from 18px), and the overview's per-tool counts
+  open the log filtered to that tool.
+
+### Upgrading
+
+No action needed; scores, reach, pass@k and pass^k are unchanged. Runs started with 0.11.0
+write one extra file per trial (`events.jsonl`, about the size of the uncompressed
+transcript). Runs from earlier versions still open in the dashboard.
+
 ## [0.10.0] — 2026-09-30
 
 Campaigns, and an MCP preflight that cannot pass vacuously. Group a multi-benchmark
