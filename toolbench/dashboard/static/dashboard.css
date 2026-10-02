@@ -28,7 +28,7 @@
   --r-ink-lo: #0b0b0b;  --r-ink-hi: #ffffff;
 
   --mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --sq: 18px;
+  --sq: 22px;
   --bar-h: 44px;     /* top bar */
   --status-h: 36px;  /* bottom status bar */
 }
@@ -80,14 +80,88 @@ button, select { font: inherit; color: inherit; }
   position: sticky; top: 0; z-index: 5; background: var(--bg);
 }
 .bar-left, .bar-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.bar-left { flex: 1; }
+.bar-right { flex: none; }
 .mark { width: 8px; height: 8px; background: var(--accent); flex: none; }
 .wordmark { font-weight: 600; letter-spacing: -.01em; }
+.wm-bench { color: var(--accent); }
 .slash { color: var(--rule-2); }
-.bench { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.picker select {
-  max-width: 44ch; background: var(--bg); border: 1px solid var(--rule-2); border-radius: 2px;
-  padding: 3px 6px; font-size: 11.5px; color: var(--ink-2); cursor: pointer;
+.bench { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 0 1 auto; max-width: 32ch; }
+
+/* ── run strip ───────────────────────────────────────────── */
+
+/* A run is a circle: the ring is its progress in its state colour, the
+   fill its mean reach on the matrix ramp. JS fits as many as the strip
+   holds (DOT + DOT_GAP); the rest are behind the library button. */
+.runs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; position: relative;
+  margin-left: 4px; padding-left: 14px; border-left: 1px solid var(--rule); height: 24px; }
+.runs[hidden] { display: none; }
+.dots { display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; padding: 5px; margin: -5px; }
+.dot {
+  --ring: var(--ink-3); --fill: var(--bg);
+  width: 18px; height: 18px; border-radius: 50%; padding: 0; border: 0; flex: none;
+  position: relative; cursor: pointer;
+  background: conic-gradient(var(--ring) var(--p, 0%), var(--rule-2) 0);
 }
+.dot::before {  /* the fill, inset to leave a 3px ring */
+  content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--fill);
+}
+.dot:not(.scored)::before { background: var(--bg); }
+.dot.running  { --ring: var(--live); }
+.dot.finished { --ring: var(--good); }
+.dot.aborted  { --ring: var(--warning); }
+.dot.stale    { --ring: var(--serious); }
+.dot.failed   { --ring: var(--critical); }
+/* A live run: an arc orbits the ring, as the sweep crosses a running trial. */
+.dot.running::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 50%;
+  border: 1.5px solid transparent; border-top-color: var(--live);
+  animation: orbit 1.2s linear infinite;
+}
+@keyframes orbit { to { transform: rotate(360deg); } }
+button.dot:hover { outline: 1px solid var(--ink-3); outline-offset: 3px; }
+.dot.sel, .dot.sel:hover { outline: 1.5px solid var(--accent); outline-offset: 4px; }
+.more {
+  flex: none; background: none; border: 1px solid var(--rule-2); border-radius: 10px;
+  padding: 1px 8px; font-size: 10.5px; letter-spacing: .06em; color: var(--ink-2); cursor: pointer;
+  min-width: 36px;
+}
+.more:hover, .more[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-3); }
+
+/* The library: every run, filterable. */
+.library {
+  position: absolute; top: calc(100% + 10px); left: 0; z-index: 20;
+  width: min(640px, calc(100vw - 32px)); max-height: min(70vh, 560px);
+  display: flex; flex-direction: column; background: var(--bg);
+  border: 1px solid var(--rule-2); border-radius: 3px; box-shadow: 0 10px 30px rgb(0 0 0 / .14);
+}
+.library[hidden] { display: none; }
+.lib-q {
+  font: inherit; color: var(--ink); background: var(--raise); border: 0;
+  border-bottom: 1px solid var(--rule); padding: 9px 12px; outline: none;
+}
+.lib-list { list-style: none; margin: 0; padding: 4px 0; overflow: auto; }
+.lib-list .empty { padding: 8px 12px; }
+.lib-list button {
+  width: 100%; display: grid; grid-template-columns: 18px minmax(0, 1fr) 9ch 5ch 11ch;
+  gap: 12px; align-items: center; text-align: left; padding: 6px 12px;
+  background: none; border: 0; cursor: pointer; color: var(--ink-2);
+}
+.lib-list button:hover, .lib-list button:focus-visible { background: var(--raise); color: var(--ink); outline: none; }
+.lib-list button.sel { box-shadow: inset 2px 0 0 var(--accent); color: var(--ink); }
+.lib-list .dot { width: 16px; height: 16px; cursor: inherit; }
+.lib-name { display: flex; flex-direction: column; min-width: 0; }
+.lib-name b, .lib-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-name b { font-weight: 600; }
+.lib-name span { font-size: 11px; color: var(--ink-3); }
+.lib-prog, .lib-reach { text-align: right; }
+.lib-state { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.lib-state.running  { color: var(--live); }
+.lib-state.finished { color: var(--good); }
+.lib-state.aborted  { color: var(--warning); }
+.lib-state.stale    { color: var(--serious); }
+.lib-state.failed   { color: var(--critical); }
 
 /* Liveness: a state word with a glyph, plus heartbeat + host. */
 .liveness { display: flex; align-items: center; gap: 12px; color: var(--ink-3); white-space: nowrap; }
@@ -181,10 +255,10 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
   padding-top: 8px; border-top: 1px solid var(--rule);
 }
 .legend > span { display: inline-flex; align-items: center; gap: 5px; }
-.legend .sq { --sq: 9px; font-size: 0; cursor: default; }
+.legend .sq { --sq: 11px; font-size: 0; cursor: default; }
 .legend .sq.running::after { display: none; }
 .ramp { display: inline-flex; }
-.ramp i { width: 7px; height: 9px; }
+.ramp i { width: 8px; height: 11px; }
 
 /* ── matrix ──────────────────────────────────────────────── */
 
@@ -198,7 +272,7 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
 .cellname { flex-direction: column; align-items: flex-start !important; justify-content: center; }
 .cellname b { font-weight: 600; word-break: break-all; }
 .cellname span { color: var(--ink-3); font-size: 11px; }
-.seeds { gap: 3px; flex-wrap: wrap; }
+.seeds { gap: 4px; flex-wrap: wrap; }
 .seeds .idx { width: var(--sq); text-align: center; }
 .stats { gap: 14px; justify-content: flex-end; white-space: nowrap; }
 .meter { width: 96px; height: 3px; background: var(--rule); position: relative; }
@@ -210,14 +284,14 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
 .sq {
   width: var(--sq); height: var(--sq); padding: 0; border: 1px solid transparent; border-radius: 1px;
   background: var(--raise); display: inline-flex; align-items: center; justify-content: center;
-  font: 700 10px/1 var(--mono); cursor: pointer; position: relative; flex: none;
+  font: 700 12px/1 var(--mono); cursor: pointer; position: relative; flex: none;
 }
 .sq:hover { outline: 1px solid var(--ink-3); outline-offset: 1px; }
 .sq.sel { outline: 1.5px solid var(--accent); outline-offset: 2px; }
 .sq.queued { background: transparent; border-color: var(--rule-2); }
 .sq.running { background: transparent; border: 1.5px solid var(--live); }
 .sq.running::after {
-  content: ""; position: absolute; left: 2px; right: 2px; bottom: 2px; height: 2px; background: var(--live);
+  content: ""; position: absolute; left: 3px; right: 3px; bottom: 3px; height: 2px; background: var(--live);
   transform-origin: left; animation: sweep 1.8s ease-in-out infinite;
 }
 @keyframes sweep { 0% { transform: scaleX(0); } 60% { transform: scaleX(1); } 100% { transform: scaleX(1); opacity: 0; } }
@@ -232,7 +306,8 @@ main { max-width: 1480px; margin: 0 auto; padding: 0 24px calc(var(--status-h) +
 .sq.r4 { background: var(--r4); color: var(--r-ink-hi); }
 
 @media (prefers-reduced-motion: reduce) {
-  .state.running::before, .progress .running, .sq.running::after { animation: none; }
+  .state.running::before, .progress .running, .sq.running::after, .dot.running::after,
+  .spin, .tick.running { animation: none; }
 }
 
 /* ── recent completions ──────────────────────────────────── */
@@ -283,7 +358,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .stages .ok { color: var(--good); }
 .stages .no { color: var(--ink-3); }
 .stages .credit { color: var(--ink-3); margin-left: auto; }
-.tools li { display: grid; grid-template-columns: minmax(0, 1fr) 64px 4ch; gap: 10px; align-items: center; padding: 2px 0; }
+.tools li { display: grid; grid-template-columns: minmax(0, 1fr) 64px 4ch; gap: 10px; align-items: center; padding: 2px 0;
+  cursor: pointer; }
+.tools li:hover .name { color: var(--accent); }
 .tools .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tools .bar { height: 3px; background: var(--ink-3); }
 .tools .n { text-align: right; color: var(--ink-3); }
@@ -332,10 +409,107 @@ body.resizing { cursor: col-resize; user-select: none; }
 .log.prose { max-height: none; }
 .label .note { margin-left: 10px; letter-spacing: .04em; text-transform: none; color: var(--ink-3); opacity: .8; }
 
+.link { padding: 0; color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; }
+.link:hover { color: var(--accent); }
+.label .link.note { text-decoration: none; }
+
+/* ── log tab: activity feed ──────────────────────────────── */
+
+.tsum .bad { color: var(--critical); }
+.tsum .live { color: var(--live); }
+.tctl .ghost.on { color: var(--accent); }
+.tl { margin: 0 0 10px; }
+.tl > summary { cursor: pointer; list-style: none; padding: 2px 0 6px; }
+.tl > summary::-webkit-details-marker { display: none; }
+.tl > summary::before { content: "▸ "; }
+.tl[open] > summary::before { content: "▾ "; }
+.tick.running {
+  background: repeating-linear-gradient(90deg, var(--live) 0 4px, transparent 4px 7px);
+  animation: blink 1.4s ease-in-out infinite;
+}
+/* A call in flight: its card waits with a spinner until the result lands. */
+.call.pending .cname { color: var(--live); }
+.spin {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid var(--rule-2); border-top-color: var(--live);
+  animation: orbit .9s linear infinite; vertical-align: -1px;
+}
+/* An agent message between calls; long ones fold until clicked. */
+.msg {
+  display: grid; grid-template-columns: 3ch 7ch minmax(0, 1fr); gap: 10px;
+  padding: 6px 4px; border-top: 1px solid var(--rule); color: var(--ink);
+}
+.msg::before { content: "»"; color: var(--accent); grid-column: 1; grid-row: 1; }
+.msg .ct { color: var(--ink-3); grid-column: 2; grid-row: 1; }
+.msg .mtext { grid-column: 3; white-space: pre-wrap; word-break: break-word; }
+.msg.long:not(.full) .mtext {
+  max-height: 9em; overflow: hidden; cursor: pointer;
+  -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent);
+}
+
+/* Timeline: one lane per tool, each call a mark spanning its duration
+   (at least a hairline), recovery turns as dashed rules. */
+.timeline { margin: 2px 0 12px; }
+.lane { display: grid; grid-template-columns: 16ch minmax(0, 1fr); gap: 10px; align-items: center; height: 20px; }
+.lane.dim { opacity: .35; }
+.lane-name {
+  background: none; border: 0; padding: 0; text-align: right; cursor: pointer; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;
+}
+.lane-name:hover, .lane.on .lane-name { color: var(--accent); }
+.track { position: relative; height: 12px; background: var(--raise); border-radius: 1px; }
+.tick {
+  position: absolute; top: 0; bottom: 0; min-width: 3px; padding: 0; border: 0; border-radius: 1px;
+  background: var(--r2); cursor: pointer; opacity: .9;
+}
+.tick:hover { opacity: 1; outline: 1px solid var(--ink); outline-offset: 1px; z-index: 1; }
+.tick.bad { background: var(--critical); top: -3px; bottom: -3px; }
+.track .retry { position: absolute; top: -4px; bottom: -4px; border-left: 1px dashed var(--warning); }
+.axis { display: flex; justify-content: space-between; color: var(--ink-3); font-size: 10px;
+  margin-left: calc(16ch + 10px); padding-top: 3px; }
+
+.tctl { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 11px; }
+.tleft { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.tctl .tsum { margin: 0; }
+.tctl .ghost { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 2px 0 8px;
+  border: 1px solid var(--accent); border-radius: 10px; color: var(--ink); font-size: 11px; }
+.chip .ghost { text-transform: none; font-size: 12px; }
+
+.feed { overflow: auto; flex: 1; min-height: 160px; }
+.call { border-top: 1px solid var(--rule); }
+.call summary {
+  display: grid; grid-template-columns: 3ch 7ch 1.5ch minmax(6ch, max-content) minmax(0, 1fr) 6ch;
+  gap: 10px; align-items: baseline; padding: 4px 4px; cursor: pointer; list-style: none;
+}
+.call summary::-webkit-details-marker { display: none; }
+.call summary:hover { background: var(--raise); }
+.call[open] > summary { background: var(--raise); }
+.call .cn, .call .ct, .call .cdur { color: var(--ink-3); }
+.call .cdur { text-align: right; }
+.call .ck { color: var(--good); font-weight: 700; }
+.call.bad .ck, .call.bad .cname { color: var(--critical); }
+.call .cname { font-weight: 600; white-space: nowrap; }
+.call .cargs { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call.retry .cn, .call.retry .rlabel { color: var(--warning); }
+.call.retry summary { grid-template-columns: 3ch max-content minmax(0, 1fr); }
+.call.flash > summary { box-shadow: inset 2px 0 0 var(--accent); }
+.cbody { padding: 6px 4px 12px calc(3ch + 10px); }
+.cbody h4.label { margin: 6px 0 4px; }
+.cbody pre {
+  margin: 0; padding: 6px 9px; background: var(--raise); border-radius: 2px;
+  font: 11.5px/1.5 var(--mono); color: var(--ink-2); white-space: pre-wrap; word-break: break-word;
+  max-height: 320px; overflow: auto;
+}
+.args { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 0; }
+.args dt { color: var(--ink-3); padding-top: 6px; }
+.args dd { margin: 0; min-width: 0; }
+.call.bad .out { box-shadow: inset 2px 0 0 var(--critical); }
+
 /* ── tooltip ─────────────────────────────────────────────── */
 
 .tip {
-  position: fixed; z-index: 10; pointer-events: none; max-width: 340px;
+  position: fixed; z-index: 30; pointer-events: none; max-width: 340px; white-space: pre-line;
   background: var(--ink); color: var(--bg); padding: 6px 9px; border-radius: 2px; font-size: 11.5px;
 }
 .tip b { display: block; font-weight: 600; word-break: break-all; }

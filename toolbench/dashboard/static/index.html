@@ -10,13 +10,17 @@
   <header class="bar">
     <div class="bar-left">
       <span class="mark" aria-hidden="true"></span>
-      <span class="wordmark">toolbench</span>
+      <span class="wordmark">tool<span class="wm-bench">bench</span></span>
       <span class="slash" aria-hidden="true">/</span>
       <span id="bench" class="bench"></span>
-      <label id="picker-wrap" class="picker" hidden>
-        <span class="visually-hidden">Run</span>
-        <select id="picker"></select>
-      </label>
+      <nav id="runs" class="runs" aria-label="Runs" hidden>
+        <div id="dots" class="dots"></div>
+        <button id="more" class="more" type="button" aria-haspopup="dialog" aria-expanded="false"></button>
+        <div id="library" class="library" role="dialog" aria-label="All runs" hidden>
+          <input id="lib-q" class="lib-q" type="search" placeholder="filter runs…" autocomplete="off" spellcheck="false">
+          <ol id="lib-list" class="lib-list"></ol>
+        </div>
+      </nav>
     </div>
     <div class="bar-right">
       <span id="liveness" class="liveness"></span>
@@ -55,6 +59,7 @@
         <div id="trial-id" class="trial-id">—</div>
         <nav class="views itabs" role="tablist" aria-label="Trial view">
           <button type="button" role="tab" data-itab="overview" aria-selected="true">overview</button>
+          <button type="button" role="tab" data-itab="log" aria-selected="false">log</button>
           <button type="button" role="tab" data-itab="prompts" aria-selected="false">prompts</button>
           <button type="button" role="tab" data-itab="files" aria-selected="false">sandbox</button>
         </nav>

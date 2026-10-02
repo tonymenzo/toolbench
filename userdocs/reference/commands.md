@@ -139,9 +139,20 @@ carries the run's figures (trials done, active slots, passes, mean reach, spend 
 budget cap, and an ETA while the run is live) with a progress line on its top edge. The page
 itself holds the trial matrix: one row per cell, one square per seed index. A square
 is queued, running, shaded by reach once finished, crashed, excluded,
-integrity-quarantined, or interrupted. Next to the matrix, a docked inspector shows the newest active trial and its
-live `console.log`. Clicking any trial pins the inspector to it, with its result, stage
-checklist, and tool calls. Once the run finalizes, a summary view shows `summary.txt`.
+integrity-quarantined, or interrupted. Next to the matrix, a docked inspector follows the
+newest active trial; clicking any trial pins it there. Its **overview** tab shows the
+result, stage checklist and per-tool call counts. Once the run finalizes, a summary view
+shows `summary.txt`.
+
+The inspector's **log** tab is the trial's activity as it happens: the agent's messages
+and each tool call, expandable to its full input and output (as recorded, so results are
+capped at 1000 characters). A call appears the moment it starts and fills in when it
+returns. Above the feed, a timeline draws one lane per tool with each call spanning its
+duration, failed calls in red and recovery turns (format retries, rate-limit resumes) as
+dashed rules; click a lane's name to narrow the feed to that tool. The feed is read from the
+trial's `events.jsonl`, fetching only what was appended since the last poll; trials
+recorded before that file existed show their transcript once finished. **raw** switches to
+the trial's `console.log` as written.
 
 Cell reach and pass counts are scored as in `summary.txt`: a crashed or quarantined trial
 counts as 0, and only an excluded trial (a subscription session-limit stop, which `resume`
@@ -159,8 +170,11 @@ When the harness collects agent feedback (`loop.ux_feedback`), a finished trial'
 headed by an **agent feedback** entry: the blind rating given before the grade was
 revealed and the audit given after it (or the single critique, in ungraded mode).
 
-Given a directory that holds several runs (a campaign, nested at any depth), the page adds
-a run picker; every `manifest.json` beneath the directory counts as a run.
+Given a directory that holds several runs (a campaign, nested at any depth), the top bar
+shows one circle per run: its ring is the run's progress in its state colour (a live run's
+ring has an orbiting sweep), its fill the run's mean reach. As many circles as fit are
+shown; the button after them (**+N** when some are hidden) opens a filterable list of every
+run. Every `manifest.json` beneath the directory counts as a run.
 
 Whether a run is still alive comes from its `status.json` heartbeat. A run that stops
 heartbeating is shown as **stale** (its process has most likely exited) and its in-flight
