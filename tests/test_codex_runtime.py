@@ -21,6 +21,13 @@ def test_first_turn_is_isolated_and_explicit(tmp_path):
     assert cmd[cmd.index("-s") + 1] == "workspace-write"
     assert cmd[cmd.index("-C") + 1] == str(tmp_path.resolve())
     assert 'model_reasoning_effort="high"' in cmd
+    assert cmd[cmd.index("features.apps=false") - 1] == "-c"
+
+
+def test_account_apps_are_off_on_resume_too(tmp_path):
+    a = _agent(tmp_path)
+    a.thread_id = "thread-123"
+    assert "features.apps=false" in a._build_command("/bin/codex", "continue")
 
 
 def test_toolbase_mcp_is_auto_approved_for_noninteractive_exec(tmp_path):

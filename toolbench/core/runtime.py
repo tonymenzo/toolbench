@@ -937,6 +937,12 @@ class CodexAgent:
             if not self.protected_paths:
                 cmd += ["-s", self.sandbox_mode]
         cmd += self._protected_path_config_args()
+        # The ChatGPT account's apps (connectors) come from whoever is logged
+        # in, not from the benchmark: they would add the operator's
+        # mail/calendar/drive tools to every arm, unrecorded, and compete
+        # with the loadout's MCP tools in codex's tool_search. A per-trial
+        # CODEX_HOME does not drop them; the feature flag does.
+        cmd += ["-c", "features.apps=false"]
         if self.model:
             cmd += ["-m", self.model]
         if self.reasoning_effort:
