@@ -1,30 +1,118 @@
-"""Optional Conjure adapter; imports Conjure only when explicitly executed."""
+"""Optional Conjure adapter; imports Conjure only when explicitly executed.
+
+A benchmark can declare what a Conjure trial of it needs in a ``conjure:``
+block of its benchmark.yaml (paths relative to that yaml):
+
+    conjure:
+      runtime: conjure-runtime.yaml        # mapping layered over the operator config
+      toolbase:
+        loadout: heptapod-sm-enumeration   # served to the root, pinned per trial
+        profile: toolbase-loadout.yaml     # the loadout file (with its versions: pins)
+      preflight:
+        module: preflight.py               # check(config: dict, run: Path, params: dict) -> dict
+        params: {...}
+
+Before any model call the adapter layers the runtime overlay, writes a
+trial-local Toolbase project (run/.toolbase: the profile, serve.yaml making it
+the active loadout) and runs from the run directory, so Toolbase serves exactly
+the pinned versions -- Toolbase resolves version pins from the project it finds
+above the working directory, not from the project Conjure is given. It then
+runs the benchmark's preflight and writes run/preflight.json. A failed
+preflight ends the trial before the model is called; its execution is recorded
+as failed with ``invalid_trial: true`` (a provisioning problem, not an agent
+result).
+"""
 from __future__ import annotations
 from pathlib import Path
+import importlib.util
+import os
+import sys
 import time
 import math
 import yaml
 from toolbench.external import read,write,digest,verify,now
 
 
-def execute(run_dir,config_path,*,timeout=3600.,builder=None):
+def execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=False):
     lock=Path(run_dir).resolve()/'.execution-lock'
     try:lock.mkdir()
     except FileExistsError as exc:raise ValueError('An execution already holds this run') from exc
-    try:return _execute(run_dir,config_path,timeout=timeout,builder=builder)
-    finally:lock.rmdir()
+    cwd=os.getcwd()
+    try:return _execute(run_dir,config_path,timeout=timeout,builder=builder,preflight_only=preflight_only)
+    finally:
+        os.chdir(cwd);lock.rmdir()
 
 
-def _execute(run_dir,config_path,*,timeout=3600.,builder=None):
+def _overlay(data,path):
+    """Layer the benchmark's runtime mapping over the operator config, section by section."""
+    overlay=yaml.safe_load(Path(path).read_text()) or {}
+    if not isinstance(overlay,dict):raise ValueError('Benchmark conjure runtime overlay must be a mapping')
+    for key,value in overlay.items():
+        if isinstance(value,dict) and isinstance(data.get(key,{}),dict):data.setdefault(key,{}).update(value)
+        else:data[key]=value
+    return digest(Path(path))
+
+
+def _provision_toolbase(data,run,spec):
+    """A trial-local Toolbase project whose active loadout is the benchmark's pinned profile."""
+    name,profile=spec['loadout'],Path(spec['profile'])
+    target=run/'.toolbase';(target/'loadouts').mkdir(parents=True,exist_ok=True)
+    files={target/'loadouts'/f'{name}.yaml':profile.read_text(),
+           target/'serve.yaml':f'default:\n  loadout: {name}\n',
+           target/'manifest.yaml':'schema_version: 1\ntoolkits: []\n'}
+    for path,text in files.items():
+        if path.exists() and path.read_text()!=text:raise ValueError(f'Trial-local Toolbase project changed: {path.name}')
+        path.write_text(text)
+    tb=data.setdefault('toolbase',{});tb['project_root']=str(run);tb['loadout']=name
+    root=data.setdefault('root',{})
+    root.pop('toolkits',None)  # never inherit an unrelated broad grant
+    root['toolbase_loadout']=name
+    return {'loadout':name,'profile_sha256':digest(profile)}
+
+
+def _preflight(data,run,spec):
+    module_path=Path(spec['module'])
+    sys.path.insert(0,str(module_path.parent))
+    try:
+        mod_spec=importlib.util.spec_from_file_location('benchmark_conjure_preflight',module_path)
+        module=importlib.util.module_from_spec(mod_spec);mod_spec.loader.exec_module(module)
+        report=module.check(data,run,dict(spec.get('params') or {}))
+    finally:
+        if sys.path and sys.path[0]==str(module_path.parent):sys.path.pop(0)
+    if not isinstance(report,dict) or report.get('status')!='passed':raise ValueError('Preflight did not pass')
+    report['module_sha256']=digest(module_path)
+    return report
+
+
+def _execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=False):
     if not math.isfinite(timeout) or timeout<=0:raise ValueError('Timeout must be finite and positive')
+    run=Path(run_dir).resolve();manifest=read(run/'external-run.json');benchmark,_=verify(run,manifest)
+    if manifest['execution']['status']!='prepared':raise ValueError('Run has already started; prepare a new run for retries')
+    data=yaml.safe_load(Path(config_path).read_text())
+    if not isinstance(data,dict):raise ValueError('Conjure configuration must be a mapping')
+    spec=benchmark.cfg.get('conjure') or {}
+    applied={}
+    if spec.get('runtime'):applied['runtime_sha256']=_overlay(data,spec['runtime'])
+    if spec.get('toolbase'):applied['toolbase']=_provision_toolbase(data,run,spec['toolbase'])
+    # Toolbase resolves version pins from the project above the working
+    # directory; run from the trial so it finds the one provisioned above.
+    os.chdir(run)
+    if spec.get('preflight'):
+        try:
+            report=_preflight(data,run,spec['preflight'])
+            write(run/'preflight.json',report);applied['preflight']='passed'
+        except Exception as exc:
+            write(run/'preflight.json',{'status':'failed','error_type':type(exc).__name__,'error':str(exc)})
+            if preflight_only:raise
+            manifest['execution'].update(status='failed',engine='conjure',invalid_trial=True,benchmark_conjure=applied,
+                error=f'Preflight failed: {type(exc).__name__}: {exc}',started_at=now(),ended_at=now(),status_source='conjure_adapter')
+            write(run/'external-run.json',manifest)
+            return manifest
+    if preflight_only:return read(run/'preflight.json') if (run/'preflight.json').exists() else {'status':'no_preflight'}
     from conjure.config import load_config_from_mapping
     from conjure.runner import build_runtime
     from conjure.event_log import EventLog
     import conjure
-    run=Path(run_dir).resolve();manifest=read(run/'external-run.json');verify(run,manifest)
-    if manifest['execution']['status']!='prepared':raise ValueError('Run has already started; prepare a new run for retries')
-    data=yaml.safe_load(Path(config_path).read_text())
-    if not isinstance(data,dict):raise ValueError('Conjure configuration must be a mapping')
     prompts=read(run/'prompts.json')
     root=data.setdefault('root',{})
     if root.get('engine','auto')=='auto':raise ValueError('Pin the Conjure root engine explicitly')
@@ -38,7 +126,8 @@ def _execute(run_dir,config_path,*,timeout=3600.,builder=None):
     # Snapshot effective configuration; API keys belong in environment variables.
     write(run/'conjure-config.json',cfg.model_dump())
     manifest['execution'].update(status='running',engine='conjure',models={'root':cfg.root.model,'llm':cfg.root.llm},
-        config_sha256=digest(run/'conjure-config.json'),started_at=now(),conjure_version=conjure.__version__)
+        config_sha256=digest(run/'conjure-config.json'),started_at=now(),conjure_version=conjure.__version__,
+        benchmark_conjure=applied)
     write(run/'external-run.json',manifest)
     runtime=None;logs=[];status='failed';error=None
     def listen(record):

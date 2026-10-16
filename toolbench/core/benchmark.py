@@ -52,6 +52,18 @@ def _load_layer(bench_dir: Path) -> dict:
         cfg["ground_truth"] = {**gt, "dir": str((bench_dir / gt["dir"]).resolve())}
     if cfg.get("checks"):
         cfg["checks"] = str((bench_dir / cfg["checks"]).resolve())
+    # `conjure:` (see toolbench/external_conjure.py): what a Conjure trial of
+    # this benchmark needs. Its file paths anchor at the declaring yaml too.
+    cj = cfg.get("conjure")
+    if isinstance(cj, dict):
+        cj = dict(cj)
+        if cj.get("runtime"):
+            cj["runtime"] = str((bench_dir / cj["runtime"]).resolve())
+        if isinstance(cj.get("toolbase"), dict) and cj["toolbase"].get("profile"):
+            cj["toolbase"] = {**cj["toolbase"], "profile": str((bench_dir / cj["toolbase"]["profile"]).resolve())}
+        if isinstance(cj.get("preflight"), dict) and cj["preflight"].get("module"):
+            cj["preflight"] = {**cj["preflight"], "module": str((bench_dir / cj["preflight"]["module"]).resolve())}
+        cfg["conjure"] = cj
     return cfg
 
 

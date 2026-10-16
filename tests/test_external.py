@@ -145,3 +145,91 @@ def test_internal_build_symlinks(benchmark,tmp_path):
     # A seeded input cannot be substituted with even a contained link.
     (work/'input.txt').unlink();(work/'input.txt').symlink_to('scratch/build.inc')
     with pytest.raises(ValueError,match='Seeded input drift'):evaluate(run)
+
+
+def conjure_benchmark(b,fail=False):
+    """Give the fixture benchmark a `conjure:` block (overlay, pinned profile, preflight)."""
+    (b/'runtime.yaml').write_text('runtime:\n  max_depth: 1\nroot:\n  tools: [filesystem]\n')
+    (b/'profile.yaml').write_text('versions:\n  kit: 1.2.3\ntoolkits:\n  kit:\n    bundles: [core]\n')
+    (b/'preflight.py').write_text(
+        "import os\nfrom pathlib import Path\n"
+        "def check(config,run,params):\n"
+        f"    if {fail!r}: raise RuntimeError('kit 1.2.3 not installed')\n"
+        "    assert Path(os.getcwd()).resolve()==Path(run).resolve(), 'not run from the trial'\n"
+        "    assert (Path(run)/'.toolbase/loadouts/kit-profile.yaml').is_file()\n"
+        "    assert config['toolbase']['project_root']==str(run) and config['runtime']['max_depth']==1\n"
+        "    return {'status':'passed','params':params}\n")
+    y=(b/'benchmark.yaml').read_text()
+    (b/'benchmark.yaml').write_text(y+'conjure:\n  runtime: runtime.yaml\n  toolbase:\n    loadout: kit-profile\n    profile: profile.yaml\n'
+        '  preflight:\n    module: preflight.py\n    params: {required: [a, b]}\n')
+
+
+def scripted_builder(run,seen):
+    from conjure import Runtime,AgentSpec
+    import os
+    class Engine:
+        def step(self,prompt):
+            (run/'workspace/answer.txt').write_text('42');return 'done'
+    def builder(cfg,**kw):
+        seen.update(cwd=os.getcwd(),max_depth=cfg.runtime.max_depth,project_root=cfg.toolbase.project_root,
+                    loadout=cfg.toolbase.loadout,root_loadout=cfg.root.toolbase_loadout,tools=cfg.root.tools)
+        rt=Runtime(store_dir=Path(cfg.runtime.store_dir),engine_factory=lambda record,runtime:Engine(),spawn_listener=kw['spawn_listener'])
+        return rt,rt.root(AgentSpec(role_prompt=cfg.root.role_prompt))
+    return builder
+
+
+def test_benchmark_conjure_block_is_honoured(benchmark,tmp_path):
+    pytest.importorskip('conjure')
+    import os
+    from toolbench.external_conjure import execute
+    conjure_benchmark(benchmark)
+    run=tmp_path/'run';prepare(benchmark,run)
+    config=tmp_path/'config.yaml';config.write_text('llms: {}\nroot:\n  engine: codex\n  role_prompt: x\n  toolkits: [broad]\n')
+    before=os.getcwd();seen={}
+    manifest=execute(run,config,timeout=3,builder=scripted_builder(run,seen))
+    assert os.getcwd()==before
+    assert manifest['execution']['status']=='completed'
+    assert Path(seen['cwd']).resolve()==run.resolve() and seen['max_depth']==1 and seen['tools']==['filesystem']
+    assert seen['project_root']==str(run.resolve()) and seen['loadout']==seen['root_loadout']=='kit-profile'
+    assert (run/'.toolbase/serve.yaml').read_text()=='default:\n  loadout: kit-profile\n'
+    report=read(run/'preflight.json');assert report['status']=='passed' and report['params']=={'required':['a','b']}
+    applied=manifest['execution']['benchmark_conjure']
+    assert applied['preflight']=='passed' and applied['toolbase']['loadout']=='kit-profile' and applied['runtime_sha256']
+    assert 'toolkits' not in read(run/'conjure-config.json')['root'] or not read(run/'conjure-config.json')['root']['toolkits']
+
+
+def test_failed_preflight_is_an_invalid_trial(benchmark,tmp_path):
+    pytest.importorskip('conjure')
+    from toolbench.external_conjure import execute
+    conjure_benchmark(benchmark,fail=True)
+    run=tmp_path/'run';prepare(benchmark,run)
+    config=tmp_path/'config.yaml';config.write_text('llms: {}\nroot:\n  engine: codex\n  role_prompt: x\n')
+    seen={}
+    manifest=execute(run,config,timeout=3,builder=scripted_builder(run,seen))
+    assert not seen, 'the model must not be called after a failed preflight'
+    e=manifest['execution'];assert e['status']=='failed' and e['invalid_trial'] and 'kit 1.2.3' in e['error']
+    assert read(run/'preflight.json')['status']=='failed'
+    evaluate(run)  # still gradeable; nothing passes
+
+
+def test_preflight_only_leaves_the_run_ready(benchmark,tmp_path):
+    pytest.importorskip('conjure')
+    from toolbench.external_conjure import execute
+    conjure_benchmark(benchmark)
+    run=tmp_path/'run';prepare(benchmark,run)
+    config=tmp_path/'config.yaml';config.write_text('llms: {}\nroot:\n  engine: codex\n  role_prompt: x\n')
+    report=execute(run,config,preflight_only=True)
+    assert report['status']=='passed' and read(run/'external-run.json')['execution']['status']=='prepared'
+    seen={};assert execute(run,config,timeout=3,builder=scripted_builder(run,seen))['execution']['status']=='completed'
+
+
+def test_inherited_conjure_paths_anchor_at_the_parent(benchmark,tmp_path):
+    from toolbench.core.benchmark import YamlBenchmark
+    conjure_benchmark(benchmark)
+    child=tmp_path/'child';(child/'variants/standard').mkdir(parents=True)
+    (child/'benchmark.yaml').write_text('name: child\nextends: ../benchmark\n')
+    for f in ['variant.yaml','user.md','system.md']:(child/'variants/standard'/f).write_text((benchmark/'variants/standard'/f).read_text())
+    (child/'variants/standard/seed').mkdir();(child/'variants/standard/seed/input.txt').write_text('frozen')
+    cj=YamlBenchmark(child).cfg['conjure']
+    assert cj['runtime']==str((benchmark/'runtime.yaml').resolve()) and cj['preflight']['module']==str((benchmark/'preflight.py').resolve())
+    assert cj['toolbase']['profile']==str((benchmark/'profile.yaml').resolve())

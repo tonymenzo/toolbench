@@ -72,6 +72,32 @@ before comparing systems. The effective config and native traces retain this
 information for audit. Scientific scope/workflow instructions should live in a
 benchmark variant, not a replacement root prompt hidden in execution config.
 
+## Benchmark-declared Conjure requirements
+
+A benchmark can declare what a Conjure trial of it needs in a `conjure:` block of its
+`benchmark.yaml` (paths are relative to that file and survive `extends`):
+
+```yaml
+conjure:
+  runtime: conjure-runtime.yaml          # mapping layered over the operator's config
+  toolbase:
+    loadout: heptapod-sm-enumeration     # becomes the root's loadout
+    profile: toolbase-loadout.yaml       # the loadout file, with its versions: pins
+  preflight:
+    module: preflight.py                 # check(config: dict, run: Path, params: dict) -> dict
+    params: {}
+```
+
+Before any model call the adapter layers the runtime overlay, writes a trial-local
+Toolbase project (`<run>/.toolbase`, with the profile as its active loadout), runs from the
+run directory (Toolbase resolves version pins from the project above the working
+directory, not from the project Conjure is handed), then calls the preflight and writes
+`<run>/preflight.json`. A failed preflight ends the trial before the model is called; its
+execution is recorded as `failed` with `invalid_trial: true`, a provisioning problem rather
+than an agent result. `toolbench external conjure RUN --config C --preflight-only` stops
+after the preflight, leaving the run ready to execute. What was applied is recorded under
+`execution.benchmark_conjure` in `external-run.json`.
+
 ## Records and interpretation
 
 - `external-run.json`: benchmark identity, file hashes, seed hashes, variant,

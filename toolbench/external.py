@@ -141,9 +141,14 @@ def evaluate_command(run_dir,execution_status):
 @click.argument('run_dir',type=click.Path(exists=True,file_okay=False))
 @click.option('--config',required=True,type=click.Path(exists=True,dir_okay=False))
 @click.option('--timeout',type=click.FloatRange(min=0,min_open=True),default=3600.,show_default=True)
-def conjure_command(run_dir,config,timeout):
+@click.option('--preflight-only',is_flag=True,help="Provision and run the benchmark's preflight; no model calls, no grading.")
+def conjure_command(run_dir,config,timeout,preflight_only):
     """Execute one Conjure root workflow, then grade its artifacts."""
     from toolbench.external_conjure import execute
+    if preflight_only:
+        try:click.echo(json.dumps(execute(run_dir,config,timeout=timeout,preflight_only=True),indent=2))
+        except (ValueError,OSError,ImportError) as exc:raise click.ClickException(str(exc)) from exc
+        return 0
     try:
         execute(run_dir,config,timeout=timeout)
         result=evaluate(run_dir)
