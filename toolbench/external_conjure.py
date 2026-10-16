@@ -32,6 +32,7 @@ def _execute(run_dir,config_path,*,timeout=3600.,builder=None):
     # benchmark variant, not an unrecorded replacement prompt in adapter config.
     root['role_prompt']=prompts['system'];root['sandbox_dir']=str(run/'workspace')
     runtime_cfg=data.setdefault('runtime',{});runtime_cfg['store_dir']=str(run/'conjure-native')
+    runtime_cfg.setdefault('auto_approve',True)
     data['mode']='one-shot';data['initial_task']=prompts['user']
     cfg=load_config_from_mapping(data)
     # Snapshot effective configuration; API keys belong in environment variables.

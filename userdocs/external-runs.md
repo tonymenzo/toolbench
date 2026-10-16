@@ -49,6 +49,11 @@ effective Conjure configuration, and saves native events/journal under
 Do not embed credentials in config; use environment-backed credentials.
 Token counts and cost are null unless explicitly measured, never fabricated zeros.
 
+Tool auto-approval defaults to on for adapter-launched runs. Set
+`runtime.auto_approve: false` explicitly to retain interactive approvals. This
+default is recorded in the effective configuration and does not change other
+Conjure sessions or global settings.
+
 Engine selection must be explicit rather than `auto`. For a one-worker comparison,
 use max_workers=1, max_depth=0 and no spawning tools. For later multi-agent variants,
 grant the appropriate tools and increase those limits. The coordinator must join

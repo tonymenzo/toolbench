@@ -86,6 +86,7 @@ def test_real_conjure_runtime(benchmark,tmp_path,behavior):
             return 'done'
     def builder(cfg,**kw):
         assert cfg.root.role_prompt=='Test role' and cfg.root.sandbox_dir==str(run/'workspace')
+        assert cfg.runtime.auto_approve is True
         rt=Runtime(store_dir=Path(cfg.runtime.store_dir),engine_factory=lambda record,runtime:Engine(),spawn_listener=kw['spawn_listener'])
         root=rt.root(AgentSpec(role_prompt=cfg.root.role_prompt))
         return rt,root
@@ -111,12 +112,15 @@ def test_conjure_execution_lock(tmp_path):
     (tmp_path/'.execution-lock').mkdir()
     with pytest.raises(ValueError,match='already holds'):execute(tmp_path,tmp_path/'missing.yaml')
 
-def test_actual_conjure_builder(benchmark,tmp_path,monkeypatch):
+@pytest.mark.parametrize('auto_setting',[None,False])
+def test_actual_conjure_builder(benchmark,tmp_path,monkeypatch,auto_setting):
     pytest.importorskip('conjure')
     import conjure.runner
     from toolbench.external_conjure import execute
     run=tmp_path/'run';prepare(benchmark,run)
     config=tmp_path/'config.yaml';config.write_text('llms: {}\nroot:\n  engine: codex\n  role_prompt: ignored\n  tools: []\n')
+    if auto_setting is False:
+        config.write_text(config.read_text()+'runtime:\n  auto_approve: false\n')
     class Engine:
         def step(self,prompt):
             (run/'workspace/answer.txt').write_text('42');(run/'workspace/certified').touch()
@@ -125,5 +129,6 @@ def test_actual_conjure_builder(benchmark,tmp_path,monkeypatch):
     # completion. Only the model-facing engine is replaced; no provider call.
     monkeypatch.setattr(conjure.runner,'_build_codex_engine',lambda **kwargs:Engine())
     result=execute(run,config,timeout=3)
+    assert read(run/'conjure-config.json')['runtime']['auto_approve'] is (auto_setting is not False)
     assert result['execution']['status']=='completed',result['execution']
     assert evaluate(run)['accepted']

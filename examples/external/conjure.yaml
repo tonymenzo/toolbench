@@ -1,6 +1,7 @@
 # Set model and the Toolbase project path before a live run.
 llms: {}
 runtime:
+  auto_approve: true
   max_workers: 1
   max_depth: 0
 root:
