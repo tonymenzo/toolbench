@@ -2628,6 +2628,10 @@ def _dashboard(target: str | None, host: str, port: int, poll_s: float,
     return 0
 
 
+from .external import external as _external_group
+cli.add_command(_external_group)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Console-script entry (`toolbench` / `tbe`). Returns a process exit code."""
     try:

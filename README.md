@@ -130,3 +130,10 @@ machine, forward the port (`ssh -L 8765:localhost:8765 <host>`).
 ## License
 
 MIT
+
+### External orchestration
+
+Use `toolbench external prepare`, `external evaluate`, or `external conjure` to
+score final artifacts without harness telemetry. See
+[external workflows](userdocs/external-runs.md) for provenance, Conjure setup and
+acceptance semantics.
