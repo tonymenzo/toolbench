@@ -242,3 +242,18 @@ def test_inherited_conjure_paths_anchor_at_the_parent(benchmark,tmp_path):
     cj=YamlBenchmark(child).cfg['conjure']
     assert cj['runtime']==str((benchmark/'runtime.yaml').resolve()) and cj['preflight']['module']==str((benchmark/'preflight.py').resolve())
     assert cj['toolbase']['profile']==str((benchmark/'profile.yaml').resolve())
+
+
+@pytest.mark.parametrize('policy',[None,'record','bogus'])
+def test_escaping_symlink_policy(benchmark,tmp_path,policy):
+    # A scratch venv links bin/python outside the workspace. Only a benchmark
+    # declaring that its checks never follow links may have it recorded.
+    if policy:(benchmark/'benchmark.yaml').write_text((benchmark/'benchmark.yaml').read_text()+f'external:\n  escaping_symlinks: {policy}\n')
+    run=tmp_path/'run';prepare(benchmark,run)
+    work=run/'workspace';(work/'answer.txt').write_text('42');(work/'certified').touch()
+    (work/'.venv/bin').mkdir(parents=True);(work/'.venv/bin/python').symlink_to('/usr/bin/python3')
+    if policy=='record':
+        result=evaluate(run,'completed')
+        assert result['accepted'] and result['artifacts']['.venv/bin/python']=={'symlink':'/usr/bin/python3','escapes':True}
+    else:
+        with pytest.raises(ValueError,match='symlink' if policy is None else 'escaping_symlinks'):evaluate(run,'completed')

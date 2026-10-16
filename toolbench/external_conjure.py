@@ -122,6 +122,11 @@ def _execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=Fal
     runtime_cfg=data.setdefault('runtime',{});runtime_cfg['store_dir']=str(run/'conjure-native')
     runtime_cfg.setdefault('auto_approve',True)
     data['mode']='one-shot';data['initial_task']=prompts['user']
+    # Let agents see the trial's wall clock: Conjure clips blocking waits to it
+    # (conjure > 0.2.7), leaving a margin to deliver before the harness stops.
+    from conjure.config import RuntimeConfig
+    if 'wall_clock_s' in RuntimeConfig.model_fields:
+        runtime_cfg.setdefault('wall_clock_s',max(timeout-min(300.,.1*timeout),.5*timeout))
     cfg=load_config_from_mapping(data)
     # Snapshot effective configuration; API keys belong in environment variables.
     write(run/'conjure-config.json',cfg.model_dump())
@@ -165,6 +170,11 @@ def _execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=Fal
             status='failed';error=f'Shutdown failed: {exc}'
         if runtime is not None:
             manifest['execution']['observed_root']=dict(runtime.record_for(addr).meta) if 'addr' in locals() else None
+            if hasattr(runtime,'costs_by_agent'):
+                try:
+                    manifest['execution']['cost_usd']=runtime.total_cost()
+                    manifest['execution']['costs_by_agent']={a.id:c for a,c in runtime.costs_by_agent()}
+                except Exception as exc:manifest['execution']['cost_error']=f'{type(exc).__name__}: {exc}'
         manifest['execution'].update(status=status,ended_at=now(),error=error,native_traces='conjure-native',status_source='conjure_adapter')
         write(run/'external-run.json',manifest)
     return manifest

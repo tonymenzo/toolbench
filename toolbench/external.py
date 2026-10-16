@@ -24,7 +24,7 @@ def digest(path):
     return h.hexdigest()
 
 
-def inventory(root,*,allow_internal_links=False):
+def inventory(root,*,allow_internal_links=False,escaping_links='reject'):
     root=Path(root);result={}
     if root.is_symlink() or not root.is_dir():raise ValueError(f'Expected a real directory: {root}')
     for p in sorted(root.rglob('*')):
@@ -38,10 +38,15 @@ def inventory(root,*,allow_internal_links=False):
             base=root.resolve();target=p.resolve()
             lexical=Path(os.path.normpath(p.parent.resolve()/os.readlink(p)))
             contained=target.is_relative_to(base) and lexical.is_relative_to(base)
-            if not allow_internal_links or not contained:
+            # A benchmark whose checks never follow links may instead have a
+            # link leaving the workspace recorded (e.g. a scratch venv's
+            # bin/python), declared as `external: {escaping_symlinks: record}`.
+            escapes=allow_internal_links and not contained and escaping_links=='record'
+            if not allow_internal_links or (not contained and not escapes):
                 raise ValueError(f'Unsafe or unsupported symlink: {p}')
             entry={'symlink':str(p.readlink())}
-            if not target.exists():entry['broken']=True
+            if escapes:entry['escapes']=True
+            elif not target.exists():entry['broken']=True
             result[p.relative_to(root).as_posix()]=entry
             continue
         if p.is_file() and not any(x in {'.git','__pycache__','.pytest_cache'} for x in p.relative_to(root).parts):
@@ -90,7 +95,9 @@ def verify(run,manifest):
     if digest(run/'prompts.json')!=manifest['prompts_sha256']:raise ValueError('Prompt drift')
     for path,expected in manifest.get('dependencies',{}).items():
         if inventory(Path(path))!=expected:raise ValueError('Benchmark dependency drift')
-    files=inventory(run/'workspace',allow_internal_links=True)
+    policy=(b.cfg.get('external') or {}).get('escaping_symlinks','reject')
+    if policy not in {'reject','record'}:raise ValueError('external.escaping_symlinks must be reject or record')
+    files=inventory(run/'workspace',allow_internal_links=True,escaping_links=policy)
     if any(files.get(p)!=h for p,h in manifest['inputs'].items()):raise ValueError('Seeded input drift')
     return b,files
 
