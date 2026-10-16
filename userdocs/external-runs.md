@@ -23,6 +23,11 @@ Use repeated `--dependency-root /path/to/shared-checks` when a benchmark imports
 shared validators, contracts or reference assets outside its own directory.
 For the Hepbench SM tasks, include `benchmarks/feyntable/sm_pipeline`. The evaluator
 rejects changes to benchmark files, declared dependencies, prompts or seeded inputs.
+Contained build symlinks (for example MadGraph include files) are recorded by
+link target without traversal. Escaping/broken links and replacements of seeded
+inputs are rejected. Publication-package validators still enforce their own
+stricter no-symlink contract.
+
 It does not automatically discover arbitrary Python import dependencies.
 
 For manual execution, `--execution-status` is an explicit operator declaration,

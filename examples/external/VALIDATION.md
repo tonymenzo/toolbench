@@ -26,3 +26,15 @@ Implementation date: 2026-10-15.
 Final targeted regression: 57 tests passed (external workflow, judge scoring,
 builtin checks and benchmark inheritance). Scalar replay was also accepted by
 all seven original stages. No live-model campaign was launched.
+
+## First live trial
+
+The scalar production_entry trial completed through MAG/Opus 5.5 in about
+16 minutes. Initial evaluation was blocked by 111 contained MadGraph build
+symlinks; none escaped the workspace. The adapter now records these links
+without following them and retains strict seed/escape checks. All 17 adapter
+tests pass. Regrading the unchanged agent artifacts yielded 0.85, not accepted:
+physics, NDA, diagrams, MadGraph, research and reproducibility passed. The
+contract stage required symbolic_derivation but received wolframscript, and
+diagram_enumeration remained partial after a standalone-UFO tool failure.
+No agent evidence or rubric was altered to obtain the recovered score.

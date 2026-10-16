@@ -24,11 +24,16 @@ def digest(path):
     return h.hexdigest()
 
 
-def inventory(root):
+def inventory(root,*,allow_internal_links=False):
     root=Path(root);result={}
     if root.is_symlink() or not root.is_dir():raise ValueError(f'Expected a real directory: {root}')
     for p in sorted(root.rglob('*')):
-        if p.is_symlink():raise ValueError(f'Symlinks are not accepted: {p}')
+        if p.is_symlink():
+            target=p.resolve()
+            if not allow_internal_links or not target.is_relative_to(root.resolve()) or not target.exists():
+                raise ValueError(f'Unsafe or unsupported symlink: {p}')
+            result[p.relative_to(root).as_posix()]={'symlink':str(p.readlink())}
+            continue
         if p.is_file() and not any(x in {'.git','__pycache__','.pytest_cache'} for x in p.relative_to(root).parts):
             result[p.relative_to(root).as_posix()]=digest(p)
     return result
@@ -75,7 +80,7 @@ def verify(run,manifest):
     if digest(run/'prompts.json')!=manifest['prompts_sha256']:raise ValueError('Prompt drift')
     for path,expected in manifest.get('dependencies',{}).items():
         if inventory(Path(path))!=expected:raise ValueError('Benchmark dependency drift')
-    files=inventory(run/'workspace')
+    files=inventory(run/'workspace',allow_internal_links=True)
     if any(files.get(p)!=h for p,h in manifest['inputs'].items()):raise ValueError('Seeded input drift')
     return b,files
 

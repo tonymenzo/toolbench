@@ -132,3 +132,16 @@ def test_actual_conjure_builder(benchmark,tmp_path,monkeypatch,auto_setting):
     assert read(run/'conjure-config.json')['runtime']['auto_approve'] is (auto_setting is not False)
     assert result['execution']['status']=='completed',result['execution']
     assert evaluate(run)['accepted']
+
+
+def test_internal_build_symlinks(benchmark,tmp_path):
+    run=tmp_path/'run';prepare(benchmark,run)
+    work=run/'workspace';(work/'answer.txt').write_text('42');(work/'certified').touch()
+    (work/'scratch').mkdir();(work/'scratch/build.inc').write_text('build data')
+    (work/'scratch/coupl.inc').symlink_to('build.inc')
+    result=evaluate(run,'completed')
+    assert result['accepted']
+    assert result['artifacts']['scratch/coupl.inc']=={'symlink':'build.inc'}
+    # A seeded input cannot be substituted with even a contained link.
+    (work/'input.txt').unlink();(work/'input.txt').symlink_to('scratch/build.inc')
+    with pytest.raises(ValueError,match='Seeded input drift'):evaluate(run)
