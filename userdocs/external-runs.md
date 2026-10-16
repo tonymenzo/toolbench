@@ -24,8 +24,9 @@ shared validators, contracts or reference assets outside its own directory.
 For the Hepbench SM tasks, include `benchmarks/feyntable/sm_pipeline`. The evaluator
 rejects changes to benchmark files, declared dependencies, prompts or seeded inputs.
 Contained build symlinks (for example MadGraph include files) are recorded by
-link target without traversal. Escaping/broken links and replacements of seeded
-inputs are rejected. Publication-package validators still enforce their own
+link target without traversal; a dangling link whose path stays inside the workspace
+(MG5 links optional libraries it never built) is recorded as `broken`. Links leaving
+the workspace, and replacements of seeded inputs, are rejected. Publication-package validators still enforce their own
 stricter no-symlink contract.
 
 It does not automatically discover arbitrary Python import dependencies.

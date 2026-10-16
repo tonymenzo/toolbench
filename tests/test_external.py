@@ -142,6 +142,15 @@ def test_internal_build_symlinks(benchmark,tmp_path):
     result=evaluate(run,'completed')
     assert result['accepted']
     assert result['artifacts']['scratch/coupl.inc']=={'symlink':'build.inc'}
+    # MG5 links optional libraries it never built: dangling but contained.
+    (work/'scratch/libcollier.so').symlink_to('../lib/collier_lib/libcollier.so')
+    result=evaluate(run)
+    assert result['accepted'] and result['artifacts']['scratch/libcollier.so']=={'symlink':'../lib/collier_lib/libcollier.so','broken':True}
+    # Dangling or not, a link that leaves the workspace is still rejected.
+    for name,target in [('escape',str(tmp_path/'outside.txt')),('escape_rel','../../outside.txt')]:
+        (work/'scratch'/name).symlink_to(target)
+        with pytest.raises(ValueError,match='Unsafe or unsupported symlink'):evaluate(run)
+        (work/'scratch'/name).unlink()
     # A seeded input cannot be substituted with even a contained link.
     (work/'input.txt').unlink();(work/'input.txt').symlink_to('scratch/build.inc')
     with pytest.raises(ValueError,match='Seeded input drift'):evaluate(run)

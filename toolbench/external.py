@@ -29,10 +29,20 @@ def inventory(root,*,allow_internal_links=False):
     if root.is_symlink() or not root.is_dir():raise ValueError(f'Expected a real directory: {root}')
     for p in sorted(root.rglob('*')):
         if p.is_symlink():
-            target=p.resolve()
-            if not allow_internal_links or not target.is_relative_to(root.resolve()) or not target.exists():
+            # Links inside the workspace are recorded, never followed. A
+            # dangling one is accepted when its path stays inside (build tools
+            # such as MG5 link optional libraries that were never built); a
+            # link leaving the workspace is rejected, since a check reading it
+            # could be fed files from outside. Seeded inputs are compared to
+            # their hashes separately, so replacing one with any link fails.
+            base=root.resolve();target=p.resolve()
+            lexical=Path(os.path.normpath(p.parent.resolve()/os.readlink(p)))
+            contained=target.is_relative_to(base) and lexical.is_relative_to(base)
+            if not allow_internal_links or not contained:
                 raise ValueError(f'Unsafe or unsupported symlink: {p}')
-            result[p.relative_to(root).as_posix()]={'symlink':str(p.readlink())}
+            entry={'symlink':str(p.readlink())}
+            if not target.exists():entry['broken']=True
+            result[p.relative_to(root).as_posix()]=entry
             continue
         if p.is_file() and not any(x in {'.git','__pycache__','.pytest_cache'} for x in p.relative_to(root).parts):
             result[p.relative_to(root).as_posix()]=digest(p)
