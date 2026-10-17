@@ -26,6 +26,8 @@ from __future__ import annotations
 from pathlib import Path
 import importlib.util
 import os
+import signal
+import subprocess
 import sys
 import time
 import math
@@ -41,6 +43,40 @@ def execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=Fals
     try:return _execute(run_dir,config_path,timeout=timeout,builder=builder,preflight_only=preflight_only)
     finally:
         os.chdir(cwd);lock.rmdir()
+
+
+def _cwds():
+    """pid -> working directory for this user's processes (Linux /proc, else lsof)."""
+    out={}
+    if Path('/proc/self/cwd').exists():
+        for d in Path('/proc').iterdir():
+            if d.name.isdigit():
+                try:out[int(d.name)]=os.readlink(d/'cwd')
+                except OSError:pass
+        return out
+    r=subprocess.run(['lsof','-a','-d','cwd','-u',str(os.getuid()),'-Fpn'],capture_output=True,text=True,timeout=30)
+    pid=None
+    for line in r.stdout.splitlines():
+        if line[:1]=='p':pid=int(line[1:])
+        elif line[:1]=='n' and pid is not None:out[pid]=line[1:]
+    return out
+
+
+def reap(folder,grace=5.):
+    """Stop processes the agents left running inside folder (e.g. backgrounded
+    jobs), so they cannot mutate the submission while it is graded."""
+    root=os.path.realpath(folder);spared={os.getpid(),os.getppid()}
+    def stray():
+        return [pid for pid,cwd in _cwds().items() if pid not in spared
+                and (cwd==root or cwd.startswith(root+os.sep))]
+    found=stray()
+    for sig in (signal.SIGTERM,signal.SIGKILL):
+        for pid in stray():
+            try:os.kill(pid,sig)
+            except OSError:pass
+        end=time.monotonic()+grace
+        while stray() and time.monotonic()<end:time.sleep(.2)
+    return sorted(found)
 
 
 def _overlay(data,path):
@@ -168,6 +204,11 @@ def _execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=Fal
             for log in logs:log.close()
         except Exception as exc:
             status='failed';error=f'Shutdown failed: {exc}'
+        try:
+            stray=reap(run/'workspace')
+            if stray:manifest['execution']['reaped_pids']=stray
+        except Exception as exc:
+            status='failed';error=f'Could not stop leftover processes: {exc}'
         if runtime is not None:
             manifest['execution']['observed_root']=dict(runtime.record_for(addr).meta) if 'addr' in locals() else None
             if hasattr(runtime,'costs_by_agent'):

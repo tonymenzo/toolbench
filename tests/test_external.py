@@ -257,3 +257,16 @@ def test_escaping_symlink_policy(benchmark,tmp_path,policy):
         assert result['accepted'] and result['artifacts']['.venv/bin/python']=={'symlink':'/usr/bin/python3','escapes':True}
     else:
         with pytest.raises(ValueError,match='symlink' if policy is None else 'escaping_symlinks'):evaluate(run,'completed')
+
+
+def test_reap_stops_processes_left_in_workspace(tmp_path):
+    import subprocess
+    from toolbench.external_conjure import reap
+    (tmp_path/'ws'/'sub').mkdir(parents=True);(tmp_path/'other').mkdir()
+    inside=subprocess.Popen(['sleep','60'],cwd=tmp_path/'ws'/'sub',start_new_session=True)
+    outside=subprocess.Popen(['sleep','60'],cwd=tmp_path/'other')
+    try:
+        assert reap(tmp_path/'ws')==[inside.pid]
+        assert inside.wait(5) is not None and outside.poll() is None
+    finally:
+        outside.kill();outside.wait()
