@@ -11,6 +11,7 @@ block of its benchmark.yaml (paths relative to that yaml):
       preflight:
         module: preflight.py               # check(config: dict, run: Path, params: dict) -> dict
         params: {...}
+      deliverable: results/catalogue.json  # optional: one reminder if the root stops before it exists
 
 Before any model call the adapter layers the runtime overlay, writes a
 trial-local Toolbase project (run/.toolbase: the profile, serve.yaml making it
@@ -179,13 +180,22 @@ def _execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=Fal
             event_log_router=lambda record:record.event_log,stream=True)
         runtime.send_external(to=addr,body=prompts['user'])
         seq=runtime.record_for(addr).inbox.latest_seq();deadline=time.monotonic()+timeout
+        # A root that ends its turn before the benchmark's declared deliverable
+        # exists (e.g. it announced a step and stopped) gets one reminder.
+        deliverable=spec.get('deliverable');nudges=[]
         while time.monotonic()<deadline:
             record=runtime.record_for(addr)
             if record.status in {'error','terminated'}:break
             if runtime.wait_for_idle(addr,seq,timeout_s=min(.25,max(.001,deadline-time.monotonic()))):
-                if runtime.record_for(addr).status=='idle':status='completed'
-                break
+                if runtime.record_for(addr).status!='idle':break
+                if deliverable and not nudges and not (run/'workspace'/deliverable).exists():
+                    nudges.append(now())
+                    runtime.send_external(to=addr,body=f'Your turn ended, but {deliverable} does not exist yet. '
+                                          'Continue the task, or report why it cannot be completed.')
+                    seq=runtime.record_for(addr).inbox.latest_seq();continue
+                status='completed';break
         else:status='timed_out'
+        if nudges:manifest['execution']['completion_nudges']=nudges
         # The coordinator must join all children before returning. Do not grade
         # while background workers can still mutate the shared result package.
         def descendants(a):

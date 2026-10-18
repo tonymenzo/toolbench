@@ -270,3 +270,24 @@ def test_reap_stops_processes_left_in_workspace(tmp_path):
         assert inside.wait(5) is not None and outside.poll() is None
     finally:
         outside.kill();outside.wait()
+
+
+def test_root_reminded_once_when_it_stops_before_the_deliverable(benchmark,tmp_path):
+    pytest.importorskip('conjure')
+    from conjure import Runtime,AgentSpec
+    from toolbench.external_conjure import execute
+    (benchmark/'benchmark.yaml').write_text((benchmark/'benchmark.yaml').read_text()+'conjure:\n  deliverable: answer.txt\n')
+    run=tmp_path/'run';prepare(benchmark,run)
+    config=tmp_path/'config.yaml';config.write_text('llms: {}\nroot:\n  engine: codex\n  role_prompt: ignored\n')
+    turns=[]
+    class Engine:
+        def step(self,prompt):
+            turns.append(prompt)
+            if len(turns)==2:(run/'workspace/answer.txt').write_text('42');(run/'workspace/certified').touch()
+            return 'next I will write the answer' if len(turns)==1 else 'done'
+    def builder(cfg,**kw):
+        rt=Runtime(store_dir=Path(cfg.runtime.store_dir),engine_factory=lambda record,runtime:Engine(),spawn_listener=kw['spawn_listener'])
+        return rt,rt.root(AgentSpec(role_prompt=cfg.root.role_prompt))
+    manifest=execute(run,config,timeout=5,builder=builder)
+    assert manifest['execution']['status']=='completed' and len(manifest['execution']['completion_nudges'])==1
+    assert len(turns)==2 and 'answer.txt does not exist yet' in turns[1] and evaluate(run)['accepted']
