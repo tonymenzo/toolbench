@@ -1,0 +1,17 @@
+# Set model and the Toolbase project path before a live run.
+llms: {}
+runtime:
+  auto_approve: true
+  max_workers: 1
+  max_depth: 0
+root:
+  engine: codex
+  model: REPLACE_WITH_MODEL_ID
+  role_prompt: supplied by the benchmark variant
+  tools: [filesystem]
+  toolbase_loadout: heptapod-process-entry
+toolbase:
+  project_root: /REPLACE/WITH/TOOLBASE/PROJECT
+  loadout: heptapod-process-entry
+  authority: loadout
+  call_timeout_s: 600
