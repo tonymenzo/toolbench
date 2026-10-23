@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **`toolbench external`**: prepare a benchmark run for a workflow outside Toolbench's
+  harnesses, and grade its artifacts with the benchmark's own checks
+  (`prepare`, `evaluate`), with benchmark, prompt, dependency and seed drift refused.
+- **Conjure trials** (`toolbench external conjure`): one Conjure root workflow on the
+  benchmark's prompts and workspace, with the benchmark's declared runtime overlay,
+  pinned trial-local Toolbase loadout and preflight; a failed preflight marks the trial
+  invalid before any model call. Processes left in the workspace are stopped before
+  grading, and a root that stops before the declared deliverable is reminded once.
+- **Conjure trial records.** After the run the adapter writes `trial.json` (per agent:
+  engine, model, API or subscription access, tokens with the cache, spend and
+  API-equivalent cost, toolkits and grants, tool calls; versions, the pinned and served
+  toolkits, timings) and `transcript.jsonl.gz` (every agent's tool calls with full
+  arguments and results, replies, messages, spawns and grants, Codex web searches with
+  their results). `toolbench external record RUN` rebuilds them from the native session.
+  The native session has one layout whichever way the trial is launched, and tool
+  outputs too long for the context are moved out of the graded workspace.
+
 ## [0.11.0] — 2026-10-01
 
 A live view of what the agent is doing. Each trial now streams its tool calls, messages and

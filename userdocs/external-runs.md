@@ -50,10 +50,12 @@ toolbench external conjure /path/to/new-run --config conjure.yaml --timeout 3600
 
 This command starts a real model workflow. Configuration is validated before
 launch. The adapter uses the benchmark's prompts and workspace, records the
-effective Conjure configuration, and saves native events/journal under
-`conjure-native/`. It does not ingest those events into Toolbench telemetry.
+effective Conjure configuration, and keeps the native session under
+`conjure-native/sessions/<id>/` (journal, session manifest, one event log per
+agent), the same layout whichever way the trial is launched. After the run it
+writes the trial record and transcript from that session (see below).
 Do not embed credentials in config; use environment-backed credentials.
-Token counts and cost are null unless explicitly measured, never fabricated zeros.
+Token counts and cost are null unless recorded, never fabricated zeros.
 
 Tool auto-approval defaults to on for adapter-launched runs. Set
 `runtime.auto_approve: false` explicitly to retain interactive approvals. This
@@ -106,15 +108,41 @@ after the preflight, leaving the run ready to execute. What was applied is recor
   model metadata, and unknown usage marked null.
 - `external-result.json`: latest grade, acceptance flag and artifact hashes.
 - `evaluations/*.json`: append-only evaluation records.
-- `conjure-native/`: native traces, separate from grading metadata.
+- `conjure-native/`: native traces, separate from grading metadata. Tool outputs
+  too long for an agent's context, which Conjure writes into the agent's sandbox
+  (`.conjure/tool-output/`), are moved here (`conjure-native/tool-output/`) after
+  the run, so the graded workspace holds the agents' work alone.
+- `trial.json`: what the trial ran and what it cost. Per agent: label, parent and
+  depth, engine and model, `access` (`api` or `subscription`), tokens
+  (`input` including cached tokens, `output`, `cache_read`, `cache_creation`),
+  `cost_usd` (spend) and `api_equivalent_cost_usd`, the toolkits it was spawned
+  with and every grant, tool-call counts by name, turns. In total: the same sums,
+  with `billing` (`api`, `subscription` or `mixed`); spend counts API-billed agents
+  only, and a total is null when any part is unknown. Also the Toolbench version
+  and git revision, Conjure and package versions, the pinned profile, the
+  toolkits Toolbase served, the preflight report and execution timings.
+- `transcript.jsonl.gz`: every agent's events in time order. `tool_call` rows
+  carry Toolbench's transcript fields (`name`, `args`, `ok`, `t`,
+  `result_summary`) plus `agent`, `call_id`, the full `result` and, when the
+  result was cut for the context, where the whole output is. Replies, inputs,
+  messages between agents, spawns, grants and terminations are rows too, and a
+  Codex agent's web searches carry the results Codex returned (from its rollout
+  file). The audit scripts that read a Toolbench trial's transcript read this one.
+
+`toolbench external record RUN` rebuilds `trial.json` and the transcript from
+the native session, for runs made before the adapter wrote them. Sessions
+recorded by Conjure before it journaled call ids, cache tokens and access are
+read too: results pair with calls in order, tokens come from the usage events
+(cache unknown), and access is inferred where the engine settles it
+(`access_source: inferred`).
 
 **Acceptance is separate from score.** In particular, a zero-weight certification
 stage can fail while the diagnostic score is 1.0. Acceptance requires completed
 execution and every rubric stage passing. This preserves Hepbench's draft-reference
 gates. Missing trajectories make tool-use diagnostics *unobserved*, not unused.
 
-These are standalone external-run records, not synthetic normal-run transcripts.
-The existing live Toolbench dashboard does not yet consume them. The CLI prints
+These are standalone external-run records. The existing live Toolbench
+dashboard does not yet consume them. The CLI prints
 execution status, stage grades, score and acceptance; a future dashboard reader
 can consume these small records without loading native agent traces.
 

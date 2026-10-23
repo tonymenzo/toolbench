@@ -22,6 +22,10 @@ runs the benchmark's preflight and writes run/preflight.json. A failed
 preflight ends the trial before the model is called; its execution is recorded
 as failed with ``invalid_trial: true`` (a provisioning problem, not an agent
 result).
+
+After the run the adapter writes the trial record (``trial.json``) and its
+transcript (``transcript.jsonl.gz``) from the native session; see
+``toolbench.external_record``.
 """
 from __future__ import annotations
 from pathlib import Path
@@ -167,17 +171,29 @@ def _execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=Fal
     cfg=load_config_from_mapping(data)
     # Snapshot effective configuration; API keys belong in environment variables.
     write(run/'conjure-config.json',cfg.model_dump())
+    from toolbench.external_record import toolbench_identity
     manifest['execution'].update(status='running',engine='conjure',models={'root':cfg.root.model,'llm':cfg.root.llm},
         config_sha256=digest(run/'conjure-config.json'),started_at=now(),conjure_version=conjure.__version__,
-        benchmark_conjure=applied)
+        toolbench=toolbench_identity(),benchmark_conjure=applied)
     write(run/'external-run.json',manifest)
     runtime=None;logs=[];status='failed';error=None
+    # One layout whichever way the trial is launched: the session's journal
+    # and manifest, and one event log per agent beside them, as Conjure's own
+    # sessions (and so the web launcher and fleet runner) write them.
+    session=run/'conjure-native'/'sessions'/manifest['run_id']
     def listen(record):
-        folder=run/'conjure-native'/'events';folder.mkdir(parents=True,exist_ok=True)
+        folder=session/'agents';folder.mkdir(parents=True,exist_ok=True)
         record.event_log=EventLog(folder/(record.addr.id+'.jsonl'));logs.append(record.event_log)
+        if record.parent is not None:
+            from conjure.events import make_system_prompt_event
+            record.event_log.emit(make_system_prompt_event(text=record.spec.role_prompt or '',
+                                                           label=record.spec.label or record.addr.label))
     try:
         runtime,addr=(builder or build_runtime)(cfg,session_id=manifest['run_id'],spawn_listener=listen,
             event_log_router=lambda record:record.event_log,stream=True)
+        if builder is None:
+            from conjure.provenance import write_manifest
+            write_manifest(Path(runtime.session_dir or session),name=manifest['run_id'],config=cfg,runtime=runtime)
         runtime.send_external(to=addr,body=prompts['user'])
         seq=runtime.record_for(addr).inbox.latest_seq();deadline=time.monotonic()+timeout
         # A root that ends its turn before the benchmark's declared deliverable
@@ -226,6 +242,22 @@ def _execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=Fal
                     manifest['execution']['cost_usd']=runtime.total_cost()
                     manifest['execution']['costs_by_agent']={a.id:c for a,c in runtime.costs_by_agent()}
                 except Exception as exc:manifest['execution']['cost_error']=f'{type(exc).__name__}: {exc}'
+        # Tool outputs too long for the context sit in each sandbox; move them
+        # out, so the graded workspace holds the agents' work alone.
+        try:
+            from toolbench.external_record import relocate_tool_output
+            moved=relocate_tool_output(run)
+            if moved:manifest['execution']['tool_output_moved']=moved
+        except Exception as exc:
+            status='failed';error=f'Could not move tool output out of the workspace: {exc}'
         manifest['execution'].update(status=status,ended_at=now(),error=error,native_traces='conjure-native',status_source='conjure_adapter')
         write(run/'external-run.json',manifest)
+        # The trial record and transcript; a failure here never changes the
+        # execution, and `toolbench external record` can rebuild them.
+        try:
+            from toolbench.external_record import write_records
+            write_records(run)
+        except Exception as exc:
+            manifest['execution']['records_error']=f'{type(exc).__name__}: {exc}'
+            write(run/'external-run.json',manifest)
     return manifest

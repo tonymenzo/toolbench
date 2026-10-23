@@ -154,6 +154,19 @@ def evaluate_command(run_dir,execution_status):
     click.echo(json.dumps({k:result[k] for k in ['run_id','execution_status','accepted','grade']},indent=2))
     return 0 if result['accepted'] else 1
 
+@external.command('record')
+@click.argument('run_dir',type=click.Path(exists=True,file_okay=False))
+def record_command(run_dir):
+    """Write a Conjure run's trial.json and transcript.jsonl.gz from its native session."""
+    from toolbench.external_record import write_records
+    run=Path(run_dir).resolve()
+    if (run/'.execution-lock').exists():raise click.ClickException('Execution is still locked; the session is still being written')
+    try:trial=write_records(run)
+    except (ValueError,OSError) as exc:raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps({'trial_id':trial['trial_id'],'agents':trial['totals']['agents'],
+                           'n_tool_calls':trial['totals']['n_tool_calls'],'tokens':trial['totals']['tokens'],
+                           'cost_usd':trial['totals']['cost_usd'],'billing':trial['totals']['billing']},indent=2))
+
 @external.command('conjure')
 @click.argument('run_dir',type=click.Path(exists=True,file_okay=False))
 @click.option('--config',required=True,type=click.Path(exists=True,dir_okay=False))
