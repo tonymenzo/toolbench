@@ -179,7 +179,7 @@ def _execute(run_dir,config_path,*,timeout=3600.,builder=None,preflight_only=Fal
     runtime=None;logs=[];status='failed';error=None
     # One layout whichever way the trial is launched: the session's journal
     # and manifest, and one event log per agent beside them, as Conjure's own
-    # sessions (and so the web launcher and fleet runner) write them.
+    # sessions (and so its web launcher) write them.
     session=run/'conjure-native'/'sessions'/manifest['run_id']
     def listen(record):
         folder=session/'agents';folder.mkdir(parents=True,exist_ok=True)
