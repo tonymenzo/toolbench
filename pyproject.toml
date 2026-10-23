@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "toolbench"
-version = "0.11.0"
+version = "0.12.0"
 description = "A platform and CLI for building benchmarks for agentic tools and harnesses."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -43,6 +43,9 @@ toolbase = ["toolbase>=0.12"]    # >=0.12: profiles became loadouts (loadout= kw
 # Serve any MCP server (stdio or HTTP) as a loadout source via
 # orchestral's MCPClient. Optional — python:/toolbase: sources work without it.
 mcp = ["mcp>=1.0"]
+# Conjure trials (`toolbench external conjure`). >=0.2.14: the session journals
+# call ids, token usage with the cache and API or subscription access.
+conjure = ["conjure-agents>=0.2.14"]
 dotenv = ["python-dotenv>=1.2.1"]
 docs = ["mkdocs-material>=9.5"]
 dev = [

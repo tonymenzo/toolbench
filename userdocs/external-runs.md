@@ -39,7 +39,8 @@ to preserve execution provenance; every evaluation is retained separately.
 
 ## Conjure adapter
 
-Install Conjure in the same environment, or make its source package importable.
+Install Conjure in the same environment (`pip install 'toolbench[conjure]'`), or make
+its source package importable.
 The adapter uses the existing `conjure.config`, `conjure.runner.build_runtime`
 and `Runtime` APIs; no Conjure patch is required. Start from
 `examples/external/conjure.yaml`, select a model and configure a Toolbase project:

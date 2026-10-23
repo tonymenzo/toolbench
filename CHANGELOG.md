@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-10-22
+
+Workflows outside Toolbench's harnesses, graded with the benchmark's own checks, and Conjure
+trials that record what every agent ran and what it cost. Nothing changes for ordinary runs.
+
 ### Added
 
 - **`toolbench external`**: prepare a benchmark run for a workflow outside Toolbench's
@@ -26,6 +31,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   their results). `toolbench external record RUN` rebuilds them from the native session.
   The native session has one layout whichever way the trial is launched, and tool
   outputs too long for the context are moved out of the graded workspace.
+- **`toolbench[conjure]`** installs Conjure 0.2.14 or later for the Conjure adapter.
+
+### Changed
+
+- **Codex trials no longer see the account's apps.** `codex exec` served the logged-in
+  ChatGPT account's apps (connectors) beside the loadout's tools, and a per-trial
+  `CODEX_HOME` did not drop them; every first turn and resume now passes
+  `-c features.apps=false`.
 
 ## [0.11.0] — 2026-10-01
 
